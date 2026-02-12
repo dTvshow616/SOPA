@@ -1,0 +1,8 @@
+[1]
+a. ???
+b. man 2 write
+
+[2]
+a. grep molino "don quijote.txt" | cat > aventuras.txt
+b. ls | wc -l
+c. cat "lista de la compra Pepe.txt" "lista de la compra Elena.txt" | uniq | wc -l > "num compra.txt" 2> /dev/null
