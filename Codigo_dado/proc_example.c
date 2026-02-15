@@ -15,9 +15,11 @@ int main(void) {
     if (pid < 0) {
       perror("fork");
       exit(EXIT_FAILURE);
+
     } else if (pid == 0) {
       printf("Child %d\n", i);
       exit(EXIT_SUCCESS);
+
     } else if (pid > 0) {
       printf("Parent %d\n", i);
     }

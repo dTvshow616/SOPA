@@ -4,8 +4,8 @@
 #include <string.h>
 #include <unistd.h>
 
-void *slow_printf(void *arg) {
-  const char *msg = arg;
+void* slow_printf(void* arg) {
+  const char* msg = arg;
   size_t i;
 
   for (i = 0; i < strlen(msg); i++) {
@@ -17,11 +17,11 @@ void *slow_printf(void *arg) {
   return NULL;
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   pthread_t h1;
   pthread_t h2;
-  char *hello = "Hello ";
-  char *world = "World";
+  char* hello = "Hello ";
+  char* world = "World";
   int error;
 
   error = pthread_create(&h1, NULL, slow_printf, hello);
