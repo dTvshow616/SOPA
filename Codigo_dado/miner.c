@@ -33,6 +33,8 @@ int miner_round(int target, int n_threads);
 static void* mine_worker(void* arg);
 int parentMiner(int target, int n_rounds, int n_threads, int write_fd);
 int childLogger(int read_fd);
+
+/*Variables globales*/
 int fd[2]; /*fd[0] para leer, fd[1] para escribir*/
 
 int main(int argc, char* argv[]) {
@@ -104,7 +106,7 @@ int parentMiner(int target, int n_rounds, int n_threads, int write_fd) {
     m.round = r;
     m.target = target;
     m.solution = sol;
-    m.accepted = 1;
+    m.accepted = 1; /*Accepted siempre por ahora*/
 
     /* Enviar el mensaje con la solución encontrada */
     if (write(write_fd, &m, sizeof(m)) == -1) {
