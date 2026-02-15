@@ -1,3 +1,4 @@
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -7,6 +8,9 @@
 
 #include "pow.h"
 
+/**
+ * Estructuras para pasar argumentos a los hilos y para enviar mensajes entre procesos
+ */
 typedef struct {
   int target; /*Objetivo a alcanzar*/
   int start;
@@ -15,13 +19,21 @@ typedef struct {
   atomic_int* solution; /*Solución encontrada por este hilo*/
 } thread_args_t;
 
+typedef struct {
+  int round;
+  int target;
+  int solution; /*Mandar -1 al finalizalizar las rondas*/
+  int accepted; /*1 si la solución es aceptada, 0 si no lo es*/
+} msg_t;
+
 /**
  * Funciones privadas
  */
 int miner_round(int target, int n_threads);
 static void* mine_worker(void* arg);
-int parentMiner(int target, int n_rounds, int n_threads);
-int childLogger(char* filename);
+int parentMiner(int target, int n_rounds, int n_threads, int write_fd);
+int childLogger(int read_fd);
+int fd[2]; /*fd[0] para leer, fd[1] para escribir*/
 
 int main(int argc, char* argv[]) {
   int target, n_rounds, n_threads, res = 0;
@@ -35,6 +47,11 @@ int main(int argc, char* argv[]) {
   n_rounds = atoi(argv[2]);
   n_threads = atoi(argv[3]);
 
+  if (pipe(fd) == -1) {
+    perror("pipe");
+    exit(EXIT_FAILURE);
+  }
+
   /*Creamos el fork*/
   pid = fork();
   if (pid < 0) {
@@ -42,12 +59,18 @@ int main(int argc, char* argv[]) {
     exit(EXIT_FAILURE);
 
   } else if (pid == 0) {
-    // childLogger("poner algo");
-    printf("Child process (logger) started with PID %d\n", getpid());
-    exit(EXIT_SUCCESS);
+    /*Ejecutar el programa del hijo: Logger*/
+    close(fd[1]); /*Cerrar la escritura en el hijo*/
+    res = childLogger(fd[0]);
+    close(fd[0]);
+    exit(res);
 
   } else if (pid > 0) {
-    res = parentMiner(target, n_rounds, n_threads);
+    /*Ejecutar el programa del padre: Minero*/
+    close(fd[0]); /*Cerrar la lectura en el padre*/
+    res = parentMiner(target, n_rounds, n_threads, fd[1]);
+    close(fd[1]); /*Para que el hijo vea EOF cuando acaben rondas*/
+
     if (res != EXIT_SUCCESS) {
       fprintf(stderr, "Error: parentMiner failed\n");
       exit(EXIT_FAILURE);
@@ -64,7 +87,8 @@ int main(int argc, char* argv[]) {
  * Minero completo: hace n_rounds rondas, y cada ronda el siguiente target
  * pasa a ser la solución encontrada.
  */
-int parentMiner(int target, int n_rounds, int n_threads) {
+int parentMiner(int target, int n_rounds, int n_threads, int write_fd) {
+  msg_t m;
   int sol = 0;
   int r = 1;
 
@@ -77,8 +101,30 @@ int parentMiner(int target, int n_rounds, int n_threads) {
     /*Para comprobar el apartado b)*/
     printf("Solution accepted : %08d --> %d\n", target, sol);
 
+    m.round = r;
+    m.target = target;
+    m.solution = sol;
+    m.accepted = 1;
+
+    /* Enviar el mensaje con la solución encontrada */
+    if (write(write_fd, &m, sizeof(m)) == -1) {
+      perror("write(pipe)");
+      return EXIT_FAILURE;
+    }
+
     target = sol; /*siguiente objetivo para la siguiente ronda = solución actual*/
   }
+
+  /*Enviar mensaje de finalización*/
+  m.round = 0;
+  m.target = -1;
+  m.solution = -1;
+  m.accepted = 0;
+  if (write(write_fd, &m, sizeof(m)) == -1) {
+    perror("write(pipe)");
+    return EXIT_FAILURE;
+  }
+
   return EXIT_SUCCESS;
 }
 
@@ -135,6 +181,7 @@ int miner_round(int target, int n_threads) {
   /*Reservar memoria*/
   threads = malloc(sizeof(pthread_t) * (size_t)n_threads);
   args = malloc(sizeof(thread_args_t) * (size_t)n_threads);
+
   if (!threads || !args) {
     free(threads);
     free(args);
@@ -190,4 +237,60 @@ int miner_round(int target, int n_threads) {
   return sol;
 }
 
-int childLogger(char* filename) { return EXIT_SUCCESS; }
+int childLogger(int read_fd) {
+  pid_t ppid = getppid();
+  msg_t m;
+  char filename[64];
+  int out = 0;
+  ssize_t n = 0;
+
+  /*Guardar nombre del fichero a crear en filename*/
+  snprintf(filename, sizeof(filename), "%jd.log", (intmax_t)ppid);
+
+  /*Abrir el fichero para escribir, crear si no existe, vaciarlo si existe*/
+  out = open(filename, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+  if (out == -1) {
+    perror("open(log)");
+    return EXIT_FAILURE;
+  }
+
+  while (1) {
+    n = read(read_fd, &m, sizeof(m));
+
+    if (n == 0) {
+      /* EOF: el padre cerró el pipe */
+      break;
+    }
+
+    if (n == -1) {
+      perror("read(pipe)");
+      close(out);
+      return EXIT_FAILURE;
+    }
+
+    /*Si no se ha recibido el mensaje completo*/
+    if (n != (ssize_t)sizeof(m)) {
+      fprintf(stderr, "Logger: mensaje incompleto leído (%zd bytes)\n", n);
+      close(out);
+      return EXIT_FAILURE;
+    }
+
+    /* Si usas el “fin” explícito */
+    if (m.solution == -1) {
+      break;
+    }
+
+    /* Formato del log (validated por defecto) */
+    dprintf(out,
+            "Id : %d\n"
+            "Winner : %jd\n"
+            "Target : %08d\n"
+            "Solution : %d ( validated )\n"
+            "Votes : %d/%d\n"
+            "Wallets : %jd:%d\n",
+            m.round, (intmax_t)ppid, m.target, m.solution, m.round, m.round, (intmax_t)ppid, m.round);
+  }
+
+  close(out);
+  return EXIT_SUCCESS;
+}
