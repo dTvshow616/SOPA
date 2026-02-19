@@ -1,8 +1,14 @@
 [1]
-a. ???
+a. man -k pthread
 b. man 2 write
 
 [2]
 a. grep molino "don quijote.txt" | cat > aventuras.txt
 b. ls | wc -l
 c. cat "lista de la compra Pepe.txt" "lista de la compra Elena.txt" | uniq | wc -l > "num compra.txt" 2> /dev/null
+
+[3]
+Ejecutamos ejercicio3.c 
+a. Se imprime: "No se pudo abrir el fichero: No such file or directory", Código de error: 2
+b. Se imprime: "No se pudo abrir el fichero: Permission denied", Código de error: 13
+c. Si se desea imprimir el valor antes de la llamada a perror se debe guardar errno en una variable auxiliar para evitar que se sobrescriba
