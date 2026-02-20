@@ -12,3 +12,7 @@ Ejecutamos ejercicio3.c
 a. Se imprime: "No se pudo abrir el fichero: No such file or directory", Código de error: 2
 b. Se imprime: "No se pudo abrir el fichero: Permission denied", Código de error: 13
 c. Si se desea imprimir el valor antes de la llamada a perror se debe guardar errno en una variable auxiliar para evitar que se sobrescriba
+
+[4]
+a. 
+b. 
