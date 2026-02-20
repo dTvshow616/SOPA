@@ -1,6 +1,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/wait.h>
@@ -8,23 +9,35 @@
 
 #include "pow.h"
 
+/* VAriables de control */
+#ifndef ERR
+#define ERR -1
+#define OK (!(ERR))
+#endif
+
 /**
  * Estructuras para pasar argumentos a los hilos y para enviar mensajes entre procesos
  */
 typedef struct {
-  int target; /*Objetivo a alcanzar*/
-  int start;
-  int end;              /*Inicio y fin del rango para este hilo*/
-  atomic_int* found;    /*Flag para indicar si se encontró solución*/
-  atomic_int* solution; /*Solución encontrada por este hilo*/
+  int target;           /* Objetivo a alcanzar */
+  int start;            /* Inicio del rango para este hilo */
+  int end;              /* Fin del rango para este hilo */
+  atomic_int* found;    /* Flag para indicar si se encontró solución */
+  atomic_int* solution; /* Solución encontrada por este hilo */
 } thread_args_t;
 
 typedef struct {
-  int round;
-  int target;
-  int solution; /*Mandar -1 al finalizalizar las rondas*/
-  int accepted; /*1 si la solución es aceptada, 0 si no lo es*/
+  int round;    /* Número de rondas */
+  int target;   /* Número a buscar */
+  int solution; /* Mandar -1 al finalizalizar las rondas */
+  int accepted; /* 1 si la solución es aceptada, 0 si no lo es */
 } msg_t;
+
+typedef struct time_aa {
+  int n_rounds;  /* Número de rondas */
+  int n_threads; /* Número de threads */
+  double time;   /* Tiempo medio de reloj */
+} TIME_AA, *PTIME_AA;
 
 /**
  * Funciones privadas
@@ -40,15 +53,19 @@ int fd[2]; /*fd[0] para leer, fd[1] para escribir*/
 int main(int argc, char* argv[]) {
   int target, n_rounds, n_threads, res = 0;
   pid_t pid;
+  /*PTIME_AA ptime;*/
 
+  /* CdE */
   if (argc != 4) {
-    return -1;
+    return ERR;
   }
 
+  /* Extraemos las variables de la línea de argumentos */
   target = atoi(argv[1]);
   n_rounds = atoi(argv[2]);
   n_threads = atoi(argv[3]);
 
+  /* Creación del pipe para la comunicación entre Miner y Logger */
   if (pipe(fd) == -1) {
     perror("pipe");
     exit(EXIT_FAILURE);
@@ -64,7 +81,7 @@ int main(int argc, char* argv[]) {
     /*Ejecutar el programa del hijo: Logger*/
     close(fd[1]); /*Cerrar la escritura en el hijo*/
     res = childLogger(fd[0]);
-    close(fd[0]);
+    close(fd[0]); /* Cerrar la lectura en el hijo porque ha terminado */
     exit(res);
 
   } else if (pid > 0) {
@@ -84,10 +101,14 @@ int main(int argc, char* argv[]) {
 
   return 0;
 }
-
 /**
- * Minero completo: hace n_rounds rondas, y cada ronda el siguiente target
- * pasa a ser la solución encontrada.
+ * @brief Minero completo: hace n_rounds rondas, y cada ronda el siguiente target pasa a ser la solución encontrada.
+ *
+ * @param target Número a buscar
+ * @param n_rounds Número de rondas a realizar
+ * @param n_threads Número de hilos a emplear
+ * @param write_fd Parte de la tubería sobre la que escribir
+ * @return EXIT_FAILURE si hubo algún error, EXIT_SUCCESS si no
  */
 int parentMiner(int target, int n_rounds, int n_threads, int write_fd) {
   msg_t m;
@@ -177,7 +198,7 @@ int miner_round(int target, int n_threads) {
   int i, j, chunk, rem, start, end, extra, err, sol = 0;
 
   if (n_threads <= 0) {
-    return -1;
+    return ERR;
   }
 
   /*Reservar memoria*/
@@ -187,7 +208,7 @@ int miner_round(int target, int n_threads) {
   if (!threads || !args) {
     free(threads);
     free(args);
-    return -1;
+    return ERR;
   }
 
   /*División del espacio [0, POW_LIMIT) entre n_threads*/
