@@ -21,7 +21,7 @@ clean:
 	@rm -f miner.o pow.o $(EXEC)
 
 run: $(EXEC)
-	./$(EXEC) 0 100 50
+	./$(EXEC) 0 500 10
 
 valgrind: $(EXEC)
 	valgrind -s --show-leak-kinds=all --track-origins=yes --leak-check=full ./$(EXEC)

@@ -1,6 +1,5 @@
 #include <fcntl.h>
 #include <pthread.h>
-#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,11 +18,9 @@
  * Estructuras para pasar argumentos a los hilos y para enviar mensajes entre procesos
  */
 typedef struct {
-  int target;           /* Objetivo a alcanzar */
-  int start;            /* Inicio del rango para este hilo */
-  int end;              /* Fin del rango para este hilo */
-  atomic_int* found;    /* Flag para indicar si se encontró solución */
-  atomic_int* solution; /* Solución encontrada por este hilo */
+  int target; /* Objetivo a alcanzar */
+  int start;  /* Inicio del rango para este hilo */
+  int end;    /* Fin del rango para este hilo */
 } thread_args_t;
 
 typedef struct {
@@ -48,7 +45,9 @@ int parentMiner(int target, int n_rounds, int n_threads, int write_fd);
 int childLogger(int read_fd);
 
 /*Variables globales*/
-int fd[2]; /*fd[0] para leer, fd[1] para escribir*/
+int fd[2];         /*fd[0] para leer, fd[1] para escribir*/
+int found = 0;     /*Variable de control para que los hilos sepan si ya se ha encontrado la solución*/
+int solution = -1; /*Variable para guardar la solución encontrada por los hilos*/
 
 int main(int argc, char* argv[]) {
   int target, n_rounds, n_threads, res = 0;
@@ -136,6 +135,8 @@ int parentMiner(int target, int n_rounds, int n_threads, int write_fd) {
     }
 
     target = sol; /*siguiente objetivo para la siguiente ronda = solución actual*/
+    sol = -1;
+    found = 0; /*Reiniciar variables de control para la siguiente ronda*/
   }
 
   /*Enviar mensaje de finalización*/
@@ -159,24 +160,15 @@ static void* mine_worker(void* arg) {
 
   for (x = a->start; x < a->end; x++) {
     /*Si otro hilo ya encontró la solución, sale*/
-    if (atomic_load(a->found) == 1) {
+    if (found == 1) {
       return NULL;
     }
 
     /*Calcula hash y compara con target*/
     if (pow_hash(x) == a->target) {
-      /*Marcar que ha encontrado solucion marcando found=1
-
-      Si g_found vale 0, entonces cámbialo a 1 y devuelve true.
-      Si g_found NO vale 0, NO lo cambies y devuelve false. Expected es el valor que se espera que tenga g_found
-      para que se realice el cambio. En este caso, se espera que g_found sea 0 para cambiarlo a 1.
-      Si g_found ya es 1, entonces no se realiza el cambio y la función devuelve false.
-      */
-
-      expected = 0;
-      if (atomic_compare_exchange_strong(a->found, &expected, 1)) {
-        atomic_store(a->solution, x);
-      }
+      /*Marcar que ha encontrado solucion marcando found=1 */
+      found = 1;
+      solution = x;
       return NULL;
     }
   }
@@ -191,11 +183,7 @@ static void* mine_worker(void* arg) {
 int miner_round(int target, int n_threads) {
   pthread_t* threads = NULL;
   thread_args_t* args = NULL;
-
-  atomic_int found = 0;
-  atomic_int solution = -1;
-
-  int i, j, chunk, rem, start, end, extra, err, sol = 0;
+  int i, j, chunk, rem, start, end, extra, err = 0;
 
   if (n_threads <= 0) {
     return ERR;
@@ -225,15 +213,13 @@ int miner_round(int target, int n_threads) {
     args[i].target = target;
     args[i].start = start;
     args[i].end = end;
-    args[i].found = &found;
-    args[i].solution = &solution;
 
     /*Crear el hilo y ponerlo a trabajar en su rango*/
     err = pthread_create(&threads[i], NULL, mine_worker, &args[i]);
 
     /*Si falla crear un hilo: marcamos found para frenar a los ya creados*/
     if (err != 0) {
-      atomic_store(&found, 1);
+      found = 1;
 
       /*Esperamos a los que sí se crearon*/
       for (j = 0; j < i; j++) {
@@ -252,12 +238,9 @@ int miner_round(int target, int n_threads) {
     pthread_join(threads[i], NULL);
   }
 
-  /*Marcar solución encontrada*/
-  sol = atomic_load(&solution);
-
   free(threads);
   free(args);
-  return sol;
+  return solution; /*solution se actualiza por el hilo que encuentra la solución, o queda en -1 si no se encontró*/
 }
 
 int childLogger(int read_fd) {
