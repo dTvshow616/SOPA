@@ -19,9 +19,10 @@ pow.o: pow.c
 clean:
 	@echo "Limpiando archivos generados..."
 	@rm -f miner.o pow.o $(EXEC)
+	@rm *.log
 
 run: $(EXEC)
-	./$(EXEC) 0 500 10
+	./$(EXEC) 0 500 1000
 
 valgrind: $(EXEC)
 	valgrind -s --show-leak-kinds=all --track-origins=yes --leak-check=full ./$(EXEC)

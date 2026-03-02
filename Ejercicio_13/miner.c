@@ -41,7 +41,7 @@ typedef struct time_aa {
  */
 int miner_round(int target, int n_threads);
 static void* mine_worker(void* arg);
-int parentMiner(int target, int n_rounds, int n_threads, int write_fd);
+int parentMiner(int target, int n_rounds, int n_threads, int write_fd, TIME_AA* time);
 int childLogger(int read_fd);
 
 /*Variables globales*/
@@ -52,7 +52,8 @@ int solution = -1; /*Variable para guardar la solución encontrada por los hilos
 int main(int argc, char* argv[]) {
   int target, n_rounds, n_threads, res = 0;
   pid_t pid;
-  /*PTIME_AA ptime;*/
+  TIME_AA time;
+  FILE* f = NULL;
 
   /* CdE */
   if (argc != 4) {
@@ -86,7 +87,7 @@ int main(int argc, char* argv[]) {
   } else if (pid > 0) {
     /*Ejecutar el programa del padre: Minero*/
     close(fd[0]); /*Cerrar la lectura en el padre*/
-    res = parentMiner(target, n_rounds, n_threads, fd[1]);
+    res = parentMiner(target, n_rounds, n_threads, fd[1], &time);
     close(fd[1]); /*Para que el hijo vea EOF cuando acaben rondas*/
 
     if (res != EXIT_SUCCESS) {
@@ -94,6 +95,15 @@ int main(int argc, char* argv[]) {
       exit(EXIT_FAILURE);
     }
   }
+
+  f = fopen("tiempos.data", "a");
+  if (!f) {
+    return ERR;
+  }
+
+  fprintf(f, "%i\t%i\t%i\t%f\n", target, time.n_rounds, time.n_threads, time.time);
+
+  fclose(f);
 
   wait(NULL);
   exit(EXIT_SUCCESS);
@@ -109,13 +119,24 @@ int main(int argc, char* argv[]) {
  * @param write_fd Parte de la tubería sobre la que escribir
  * @return EXIT_FAILURE si hubo algún error, EXIT_SUCCESS si no
  */
-int parentMiner(int target, int n_rounds, int n_threads, int write_fd) {
+int parentMiner(int target, int n_rounds, int n_threads, int write_fd, TIME_AA* time) {
   msg_t m;
   int sol = 0;
   int r = 1;
+  clock_t start, end;
+
+  start = clock();
 
   for (r = 1; r <= n_rounds; r++) {
     sol = miner_round(target, n_threads);
+
+    /* Registar tiempos y tal */
+    end = clock();
+
+    time->n_rounds = n_rounds;
+    time->n_threads = n_threads;
+    time->time = (end - start) / CLOCKS_PER_SEC;
+
     if (sol < 0) {
       fprintf(stderr, "Error: no se encontró solución en ronda %d\n", r);
       return EXIT_FAILURE;
