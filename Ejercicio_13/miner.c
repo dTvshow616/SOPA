@@ -8,14 +8,14 @@
 
 #include "pow.h"
 
-/* VAriables de control */
+/* Variables de control */
 #ifndef ERR
 #define ERR -1
 #define OK (!(ERR))
 #endif
 
 /**
- * Estructuras para pasar argumentos a los hilos y para enviar mensajes entre procesos
+ * @brief Estructura para pasar argumentos a los hilos
  */
 typedef struct {
   int target; /* Objetivo a alcanzar */
@@ -23,6 +23,9 @@ typedef struct {
   int end;    /* Fin del rango para este hilo */
 } thread_args_t;
 
+/**
+ * @brief Estructura para enviar mensajes entre procesos
+ */
 typedef struct {
   int round;    /* Número de rondas */
   int target;   /* Número a buscar */
@@ -30,6 +33,9 @@ typedef struct {
   int accepted; /* 1 si la solución es aceptada, 0 si no lo es */
 } msg_t;
 
+/**
+ * @brief Estructura para registrar los tiempos de ejecución del programa
+ */
 typedef struct time_aa {
   int n_rounds;  /* Número de rondas */
   int n_threads; /* Número de threads */
@@ -39,16 +45,50 @@ typedef struct time_aa {
 /**
  * Funciones privadas
  */
+
+/**
+ * @brief Funcuón privada que resuelve una ronda usando un cierto número hilos.
+ *
+ * @param target el target a buscar
+ * @param n_threads el número de hilos a emplear
+ * @return la solución encontrada, o -1 si no se encontró.
+ */
 int miner_round(int target, int n_threads);
+
+/**
+ * @brief Función que ejecutan los hilos, se ponen a probar los valores posibles dentro del rango que se les asignó y si encuentran la solución,
+ * marcan found=1 y guardan la solución en solution
+ *
+ * @param arg puntero para una estructura que guarde  argumentos entre hilos
+ * @return // REVIEW - Qué poner aquí
+ */
 static void* mine_worker(void* arg);
+
+/**
+ * @brief Minero completo: hace n_rounds rondas, y cada ronda el siguiente target pasa a ser la solución encontrada.
+ *
+ * @param target Número a buscar
+ * @param n_rounds Número de rondas a realizar
+ * @param n_threads Número de hilos a emplear
+ * @param write_fd Parte de la tubería sobre la que escribir
+ * @return EXIT_FAILURE si hubo algún error, EXIT_SUCCESS si no
+ */
 int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_fd, TIME_AA* time);
+
+/**
+ * @brief Se encarga de guardar en un archivo el resultado de las búsquedas
+ *
+ * @param read_fd Parte de la tubería sobre la que leer
+ * @param write_fd Parte de la tubería sobre la que escribir
+ * @return EXIT_FAILURE si hubo algún error, EXIT_SUCCESS si no
+ */
 int childLogger(int read_fd, int write_fd);
 
 /*Variables globales*/
-int fd_ml[2];      /*fd[0] para leer, fd[1] para escribir, ml(miner --> logger)*/
-int fd_lm[2];      /*fd[0] para leer, fd[1] para escribir, lm(logger --> miner)*/
-int found = 0;     /*Variable de control para que los hilos sepan si ya se ha encontrado la solución*/
-int solution = -1; /*Variable para guardar la solución encontrada por los hilos*/
+int fd_ml[2];      /* fd[0] para leer, fd[1] para escribir, ml(miner --> logger) */
+int fd_lm[2];      /* fd[0] para leer, fd[1] para escribir, lm(logger --> miner) */
+int found = 0;     /* Variable de control para que los hilos sepan si ya se ha encontrado la solución */
+int solution = -1; /* Variable para guardar la solución encontrada por los hilos */
 
 int main(int argc, char* argv[]) {
   int target, n_rounds, n_threads, res = 0;
@@ -124,14 +164,105 @@ int main(int argc, char* argv[]) {
 
   return 0;
 }
+
+/**
+ * Funciones privadas
+ */
+
+/**
+ * @brief Funcuón privada que resuelve una ronda usando un cierto número hilos.
+ */
+int miner_round(int target, int n_threads) {
+  pthread_t* threads = NULL;
+  thread_args_t* args = NULL;
+  int i, j, chunk, rem, start, end, extra, err = 0;
+
+  if (n_threads <= 0) {
+    return ERR;
+  }
+
+  /*Reservar memoria*/
+  threads = malloc(sizeof(pthread_t) * (size_t)n_threads);
+  args = malloc(sizeof(thread_args_t) * (size_t)n_threads);
+
+  if (!threads || !args) {
+    free(threads);
+    free(args);
+    return ERR;
+  }
+
+  /*División del espacio [0, POW_LIMIT) entre n_threads*/
+  chunk = POW_LIMIT / n_threads;
+  rem = POW_LIMIT % n_threads;
+
+  start = 0;
+
+  /*Para cada hilo, calcular su rango de trabajo*/
+  for (i = 0; i < n_threads; i++) {
+    extra = (i < rem) ? 1 : 0;
+    end = start + chunk + extra;
+
+    args[i].target = target;
+    args[i].start = start;
+    args[i].end = end;
+
+    /*Crear el hilo y ponerlo a trabajar en su rango*/
+    err = pthread_create(&threads[i], NULL, mine_worker, &args[i]);
+
+    /*Si falla crear un hilo: marcamos found para frenar a los ya creados*/
+    if (err != 0) {
+      found = 1;
+
+      /*Esperamos a los que sí se crearon*/
+      for (j = 0; j < i; j++) {
+        pthread_join(threads[j], NULL);
+      }
+
+      free(threads);
+      free(args);
+      return -1;
+    }
+    start = end;
+  }
+
+  /*Esperamos a todos (cuando found=1, los demás saldrán solos)*/
+  for (i = 0; i < n_threads; i++) {
+    pthread_join(threads[i], NULL);
+  }
+
+  free(threads);
+  free(args);
+  return solution; /*solution se actualiza por el hilo que encuentra la solución, o queda en -1 si no se encontró*/
+}
+
+/**
+ * @brief Función que ejecutan los hilos, se ponen a probar los valores posibles dentro del rango que se les asignó y si encuentran la solución,
+ * marcan found=1 y guardan la solución en solution
+ */
+static void* mine_worker(void* arg) {
+  thread_args_t* a = (thread_args_t*)arg;
+  int x, expected = 0;
+
+  for (x = a->start; x < a->end; x++) {
+    /*Si otro hilo ya encontró la solución, sale*/
+    if (found == 1) {
+      return NULL;
+    }
+
+    /*Calcula hash y compara con target*/
+    if (pow_hash(x) == a->target) {
+      /*Marcar que ha encontrado solucion marcando found=1 */
+      found = 1;
+      solution = x;
+      return NULL;
+    }
+  }
+
+  return NULL;
+}
+
 /**
  * @brief Minero completo: hace n_rounds rondas, y cada ronda el siguiente target pasa a ser la solución encontrada.
- *
- * @param target Número a buscar
- * @param n_rounds Número de rondas a realizar
- * @param n_threads Número de hilos a emplear
- * @param write_fd Parte de la tubería sobre la que escribir
- * @return EXIT_FAILURE si hubo algún error, EXIT_SUCCESS si no
  */
 int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_fd, TIME_AA* time) {
   msg_t m;
@@ -202,97 +333,6 @@ int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_
   }
 
   return EXIT_SUCCESS;
-}
-
-/*Función que ejecutan los hilos, se ponen a probar los valores posibles dentro del rango que se les asignó
-y si encuentran la solución, marcan found=1 y guardan la solución en solution*/
-static void* mine_worker(void* arg) {
-  thread_args_t* a = (thread_args_t*)arg;
-  int x, expected = 0;
-
-  for (x = a->start; x < a->end; x++) {
-    /*Si otro hilo ya encontró la solución, sale*/
-    if (found == 1) {
-      return NULL;
-    }
-
-    /*Calcula hash y compara con target*/
-    if (pow_hash(x) == a->target) {
-      /*Marcar que ha encontrado solucion marcando found=1 */
-      found = 1;
-      solution = x;
-      return NULL;
-    }
-  }
-
-  return NULL;
-}
-
-/**
- * Resuelve UNA ronda (un target) usando n_threads hilos.
- * Devuelve la solución encontrada, o -1 si no se encontró.
- */
-int miner_round(int target, int n_threads) {
-  pthread_t* threads = NULL;
-  thread_args_t* args = NULL;
-  int i, j, chunk, rem, start, end, extra, err = 0;
-
-  if (n_threads <= 0) {
-    return ERR;
-  }
-
-  /*Reservar memoria*/
-  threads = malloc(sizeof(pthread_t) * (size_t)n_threads);
-  args = malloc(sizeof(thread_args_t) * (size_t)n_threads);
-
-  if (!threads || !args) {
-    free(threads);
-    free(args);
-    return ERR;
-  }
-
-  /*División del espacio [0, POW_LIMIT) entre n_threads*/
-  chunk = POW_LIMIT / n_threads;
-  rem = POW_LIMIT % n_threads;
-
-  start = 0;
-
-  /*Para cada hilo, calcular su rango de trabajo*/
-  for (i = 0; i < n_threads; i++) {
-    extra = (i < rem) ? 1 : 0;
-    end = start + chunk + extra;
-
-    args[i].target = target;
-    args[i].start = start;
-    args[i].end = end;
-
-    /*Crear el hilo y ponerlo a trabajar en su rango*/
-    err = pthread_create(&threads[i], NULL, mine_worker, &args[i]);
-
-    /*Si falla crear un hilo: marcamos found para frenar a los ya creados*/
-    if (err != 0) {
-      found = 1;
-
-      /*Esperamos a los que sí se crearon*/
-      for (j = 0; j < i; j++) {
-        pthread_join(threads[j], NULL);
-      }
-
-      free(threads);
-      free(args);
-      return -1;
-    }
-    start = end;
-  }
-
-  /*Esperamos a todos (cuando found=1, los demás saldrán solos)*/
-  for (i = 0; i < n_threads; i++) {
-    pthread_join(threads[i], NULL);
-  }
-
-  free(threads);
-  free(args);
-  return solution; /*solution se actualiza por el hilo que encuentra la solución, o queda en -1 si no se encontró*/
 }
 
 int childLogger(int read_fd, int write_fd) {

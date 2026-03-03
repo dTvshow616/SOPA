@@ -22,7 +22,7 @@ clean:
 	@rm *.log
 
 run: $(EXEC)
-	./$(EXEC) 0 500 1000
+	./$(EXEC) 0 500 35
 
 valgrind: $(EXEC)
-	valgrind -s --show-leak-kinds=all --track-origins=yes --leak-check=full ./$(EXEC)
+	valgrind -s --show-leak-kinds=all --track-origins=yes --leak-check=full ./$(EXEC) 0 500 35
