@@ -41,11 +41,12 @@ typedef struct time_aa {
  */
 int miner_round(int target, int n_threads);
 static void* mine_worker(void* arg);
-int parentMiner(int target, int n_rounds, int n_threads, int write_fd, TIME_AA* time);
-int childLogger(int read_fd);
+int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_fd);
+int childLogger(int read_fd, int write_fd);
 
 /*Variables globales*/
-int fd[2];         /*fd[0] para leer, fd[1] para escribir*/
+int fd_ml[2];      /*fd[0] para leer, fd[1] para escribir, ml(miner --> logger)*/
+int fd_lm[2];      /*fd[0] para leer, fd[1] para escribir, lm(logger --> miner)*/
 int found = 0;     /*Variable de control para que los hilos sepan si ya se ha encontrado la solución*/
 int solution = -1; /*Variable para guardar la solución encontrada por los hilos*/
 
@@ -65,30 +66,43 @@ int main(int argc, char* argv[]) {
   n_rounds = atoi(argv[2]);
   n_threads = atoi(argv[3]);
 
-  /* Creación del pipe para la comunicación entre Miner y Logger */
-  if (pipe(fd) == -1) {
-    perror("pipe");
+  /* Pipe Miner->Logger */
+  if (pipe(fd_ml) == -1) {
+    perror("pipe fd_ml");
     exit(EXIT_FAILURE);
   }
 
-  /*Creamos el fork*/
+  /* Pipe Logger->Miner */
+  if (pipe(fd_lm) == -1) {
+    perror("pipe fd_lm");
+    exit(EXIT_FAILURE);
+  }
+
   pid = fork();
   if (pid < 0) {
     perror("fork");
     exit(EXIT_FAILURE);
 
   } else if (pid == 0) {
-    /*Ejecutar el programa del hijo: Logger*/
-    close(fd[1]); /*Cerrar la escritura en el hijo*/
-    res = childLogger(fd[0]);
-    close(fd[0]); /* Cerrar la lectura en el hijo porque ha terminado */
+    /* Codigo del hijo (loger) */
+    close(fd_ml[1]); /* no escribe en Miner->Logger */
+    close(fd_lm[0]); /* no lee en Logger->Miner */
+
+    res = childLogger(fd_ml[0], fd_lm[1]);
+
+    close(fd_ml[0]);
+    close(fd_lm[1]);
     exit(res);
 
-  } else if (pid > 0) {
-    /*Ejecutar el programa del padre: Minero*/
-    close(fd[0]); /*Cerrar la lectura en el padre*/
-    res = parentMiner(target, n_rounds, n_threads, fd[1], &time);
-    close(fd[1]); /*Para que el hijo vea EOF cuando acaben rondas*/
+  } else {
+    /* Codgio del padre (miner) */
+    close(fd_ml[0]); /* no lee en Miner->Logger */
+    close(fd_lm[1]); /* no escribe en Logger->Miner */
+
+    res = parentMiner(target, n_rounds, n_threads, fd_ml[1], fd_lm[0]);
+
+    close(fd_ml[1]); /* importante: EOF al logger cuando acabes */
+    close(fd_lm[0]);
 
     if (res != EXIT_SUCCESS) {
       fprintf(stderr, "Error: parentMiner failed\n");
@@ -119,13 +133,11 @@ int main(int argc, char* argv[]) {
  * @param write_fd Parte de la tubería sobre la que escribir
  * @return EXIT_FAILURE si hubo algún error, EXIT_SUCCESS si no
  */
-int parentMiner(int target, int n_rounds, int n_threads, int write_fd, TIME_AA* time) {
+int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_fd) {
   msg_t m;
-  int sol = 0;
+  int sol, ok = 0;
   int r = 1;
-  clock_t start, end;
-
-  start = clock();
+  ssize_t n = 0;
 
   for (r = 1; r <= n_rounds; r++) {
     sol = miner_round(target, n_threads);
@@ -155,6 +167,22 @@ int parentMiner(int target, int n_rounds, int n_threads, int write_fd, TIME_AA* 
       return EXIT_FAILURE;
     }
 
+    /* Esperar al OK del logger */
+    n = read(read_fd, &ok, sizeof(ok));
+    if (n == 0) {
+      fprintf(stderr, "Miner: logger cerró la pipe antes de tiempo\n");
+      return EXIT_FAILURE;
+    }
+    if (n != (ssize_t)sizeof(ok)) {
+      perror("Error leyendo en la tubería l->m");
+      return EXIT_FAILURE;
+    }
+    if (ok != 1) {
+      fprintf(stderr, "Error leyendo en la tubería l->m, ok=(%d)\n", ok);
+      return EXIT_FAILURE;
+    }
+
+    /* Siguiente ronda */
     target = sol; /*siguiente objetivo para la siguiente ronda = solución actual*/
     sol = -1;
     found = 0; /*Reiniciar variables de control para la siguiente ronda*/
@@ -264,11 +292,12 @@ int miner_round(int target, int n_threads) {
   return solution; /*solution se actualiza por el hilo que encuentra la solución, o queda en -1 si no se encontró*/
 }
 
-int childLogger(int read_fd) {
+int childLogger(int read_fd, int write_fd) {
   pid_t ppid = getppid();
   msg_t m;
   char filename[64];
   int out = 0;
+  int ok = 1;
   ssize_t n = 0;
 
   /*Guardar nombre del fichero a crear en filename*/
@@ -277,7 +306,7 @@ int childLogger(int read_fd) {
   /*Abrir el fichero para escribir, crear si no existe, vaciarlo si existe*/
   out = open(filename, O_CREAT | O_TRUNC | O_WRONLY, 0644);
   if (out == -1) {
-    perror("open(log)");
+    perror("Error abriendo el fichero");
     return EXIT_FAILURE;
   }
 
@@ -295,14 +324,14 @@ int childLogger(int read_fd) {
       return EXIT_FAILURE;
     }
 
-    /*Si no se ha recibido el mensaje completo*/
+    /* Si no se ha recibido el mensaje completo */
     if (n != (ssize_t)sizeof(m)) {
       fprintf(stderr, "Logger: mensaje incompleto leído (%zd bytes)\n", n);
       close(out);
       return EXIT_FAILURE;
     }
 
-    /* Si usas el “fin” explícito */
+    /* Fin marcado por el minero */
     if (m.solution == -1) {
       break;
     }
@@ -316,6 +345,13 @@ int childLogger(int read_fd) {
             "Votes : %d/%d\n"
             "Wallets : %jd:%d\n",
             m.round, (intmax_t)ppid, m.target, m.solution, m.round, m.round, (intmax_t)ppid, m.round);
+
+    /* Enviar OK al minero para que continúe */
+    if (write(write_fd, &ok, sizeof(ok)) != (ssize_t)sizeof(ok)) {
+      perror("Error escribiendo en la tubería l->m");
+      close(out);
+      return EXIT_FAILURE;
+    }
   }
 
   close(out);
