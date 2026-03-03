@@ -41,7 +41,7 @@ typedef struct time_aa {
  */
 int miner_round(int target, int n_threads);
 static void* mine_worker(void* arg);
-int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_fd);
+int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_fd, TIME_AA* time);
 int childLogger(int read_fd, int write_fd);
 
 /*Variables globales*/
@@ -99,7 +99,7 @@ int main(int argc, char* argv[]) {
     close(fd_ml[0]); /* no lee en Miner->Logger */
     close(fd_lm[1]); /* no escribe en Logger->Miner */
 
-    res = parentMiner(target, n_rounds, n_threads, fd_ml[1], fd_lm[0]);
+    res = parentMiner(target, n_rounds, n_threads, fd_ml[1], fd_lm[0], &time);
 
     close(fd_ml[1]); /* importante: EOF al logger cuando acabes */
     close(fd_lm[0]);
@@ -133,11 +133,14 @@ int main(int argc, char* argv[]) {
  * @param write_fd Parte de la tubería sobre la que escribir
  * @return EXIT_FAILURE si hubo algún error, EXIT_SUCCESS si no
  */
-int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_fd) {
+int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_fd, TIME_AA* time) {
   msg_t m;
   int sol, ok = 0;
   int r = 1;
   ssize_t n = 0;
+  clock_t start, end;
+
+  start = clock();
 
   for (r = 1; r <= n_rounds; r++) {
     sol = miner_round(target, n_threads);
