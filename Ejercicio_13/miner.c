@@ -56,8 +56,8 @@ typedef struct time_aa {
 int miner_round(int target, int n_threads);
 
 /**
- * @brief Función que ejecutan los hilos, se ponen a probar los valores posibles dentro del rango que se les asignó y si encuentran la solución,
- * marcan found=1 y guardan la solución en solution
+ * @brief Función que ejecutan los hilos, se ponen a probar los valores posibles dentro del rango que se les asignó y si
+ * encuentran la solución, marcan found=1 y guardan la solución en solution
  *
  * @param arg puntero para una estructura que guarde  argumentos entre hilos
  * @return // REVIEW - Qué poner aquí
@@ -236,8 +236,8 @@ int miner_round(int target, int n_threads) {
 }
 
 /**
- * @brief Función que ejecutan los hilos, se ponen a probar los valores posibles dentro del rango que se les asignó y si encuentran la solución,
- * marcan found=1 y guardan la solución en solution
+ * @brief Función que ejecutan los hilos, se ponen a probar los valores posibles dentro del rango que se les asignó y si
+ * encuentran la solución, marcan found=1 y guardan la solución en solution
  */
 static void* mine_worker(void* arg) {
   thread_args_t* a = (thread_args_t*)arg;
@@ -266,7 +266,7 @@ static void* mine_worker(void* arg) {
  */
 int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_fd, TIME_AA* time) {
   msg_t m;
-  int sol, ok = 0;
+  int sol, ok, random = 0;
   int r = 1;
   ssize_t n = 0;
   clock_t start, end;
@@ -293,7 +293,13 @@ int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_
     m.round = r;
     m.target = target;
     m.solution = sol;
-    m.accepted = 1; /*Accepted siempre por ahora*/
+
+    random = (rand() % 10) + 1;
+    if (random > 9) {
+      m.accepted = 0;
+    } else {
+      m.accepted = 1;
+    }
 
     /* Enviar el mensaje con la solución encontrada */
     if (write(write_fd, &m, sizeof(m)) == -1) {
@@ -379,15 +385,25 @@ int childLogger(int read_fd, int write_fd) {
       break;
     }
 
-    /* Formato del log (validated por defecto) */
-    dprintf(out,
-            "Id : %d\n"
-            "Winner : %jd\n"
-            "Target : %08d\n"
-            "Solution : %d ( validated )\n"
-            "Votes : %d/%d\n"
-            "Wallets : %jd:%d\n",
-            m.round, (intmax_t)ppid, m.target, m.solution, m.round, m.round, (intmax_t)ppid, m.round);
+    if (m.accepted == 1) {
+      dprintf(out,
+              "Id : %d\n"
+              "Winner : %jd\n"
+              "Target : %08d\n"
+              "Solution : %d ( validated )\n"
+              "Votes : %d/%d\n"
+              "Wallets : %jd:%d\n",
+              m.round, (intmax_t)ppid, m.target, m.solution, m.round, m.round, (intmax_t)ppid, m.round);
+    } else {
+      dprintf(out,
+              "Id : %d\n"
+              "Winner : %jd\n"
+              "Target : %08d\n"
+              "Solution : %d ( rejected )\n"
+              "Votes : %d/%d\n"
+              "Wallets : %jd:%d\n",
+              m.round, (intmax_t)ppid, m.target, m.solution, m.round, m.round, (intmax_t)ppid, m.round);
+    }
 
     /* Enviar OK al minero para que continúe */
     if (write(write_fd, &ok, sizeof(ok)) != (ssize_t)sizeof(ok)) {

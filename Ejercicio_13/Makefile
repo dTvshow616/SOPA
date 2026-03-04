@@ -1,6 +1,6 @@
 EXEC = miner
-CC = gcc
-CFALGS = -Wall -g -Werror -Wpedantic -ansi -O2
+CC = gcc -pthread
+CFALGS = -Wall -Wextra -g -Werror -Wpedantic -ansi -O2
 
 all: $(EXEC)
 
@@ -22,7 +22,7 @@ clean:
 	@rm *.log
 
 run: $(EXEC)
-	./$(EXEC) 0 500 35
+	./$(EXEC) 0 500 30
 
 valgrind: $(EXEC)
 	valgrind -s --show-leak-kinds=all --track-origins=yes --leak-check=full ./$(EXEC) 0 500 35
