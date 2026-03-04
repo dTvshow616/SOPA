@@ -6,7 +6,7 @@
  * @date 2024-02-01
  *
  * @copyright Copyright (c) 2022
- *
+
  */
 
 #ifndef _POW_H

@@ -1,24 +1,32 @@
 EXEC = miner
 CC = gcc -pthread
-CFALGS = -Wall -Wextra -g -Werror -Wpedantic -ansi -O2
+CFLAGS = -Wall -Wextra -g -Werror -Wpedantic -O2 -I$(INCLUDE_DIR)
+
+# Directorios
+SRC_DIR = src
+INCLUDE_DIR = include
+OBJ_DIR = obj
 
 all: $(EXEC)
 
-$(EXEC) : miner.o pow.o 
+$(EXEC) : $(OBJ_DIR)/miner.o $(OBJ_DIR)/pow.o 
 	@echo "Compilando $(EXEC)"
 	@$(CC) $(CFALGS) -o $@ $^
 
-miner.o: miner.c pow.h
+$(OBJ_DIR)/pow.o: $(SRC_DIR)/pow.c
 	@echo "Compilando: $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-pow.o: pow.c
+$(OBJ_DIR)/miner.o: $(SRC_DIR)/miner.c $(INCLUDE_DIR)/pow.h
 	@echo "Compilando: $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
 	@echo "Limpiando archivos generados..."
-	@rm -f miner.o pow.o $(EXEC)
+	@rm -f $(OBJ_DIR)/miner.o $(OBJ_DIR)/pow.o $(EXEC)
+
+toss:
+	@echo "Limpiando logs generados..."
 	@rm *.log
 
 run: $(EXEC)

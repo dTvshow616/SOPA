@@ -1,6 +1,12 @@
 #!/bin/bash
-# chmod +x tiempitos.sh
-# ./tiempitos.sh
+# chmod +x tomaTiempos.sh
+# ./tomaTiempos.sh
+
+# @file tomaTiempos.sh
+# @author Carlos Mendez & Ana Olsson
+# @brief Script to time miner with multiple threads
+# @version 3.0
+# @date 2026-03-01
 
 echo "Select the target"
 read target
@@ -18,4 +24,4 @@ for((i = 1; i <= n_threads; i++)); do
   ./miner $target $n_rounds $i
 done
 
-echo "Done! :]"
+echo "-------------------------- Done! ----------------------------------"
