@@ -106,6 +106,10 @@ int main(int argc, char* argv[]) {
   target = atoi(argv[1]);
   n_rounds = atoi(argv[2]);
   n_threads = atoi(argv[3]);
+  if (target < 0 || n_rounds < 0 || n_threads < 0) {
+    perror("Invalid arguments\n");
+    return -1;
+  }
 
   /* Pipe Miner->Logger */
   if (pipe(fd_ml) == -1) {
@@ -280,7 +284,7 @@ int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_
 
     if (sol < 0) {
       fprintf(stderr, "Error: no se encontró solución en ronda %d\n", r);
-      printf("Miner exited unexpectedly");
+      printf("Miner exited unexpectedly\n");
       return EXIT_FAILURE;
     }
     /* Para comprobar el apartado b) */
@@ -300,7 +304,7 @@ int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_
     /* Enviar el mensaje con la solución encontrada */
     if (write(write_fd, &m, sizeof(m)) == -1) {
       perror("write(pipe)");
-      printf("Miner exited unexpectedly");
+      printf("Miner exited unexpectedly\n");
       return EXIT_FAILURE;
     }
 
@@ -309,19 +313,19 @@ int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_
 
     if (n == 0) {
       fprintf(stderr, "Miner: logger cerró la pipe antes de tiempo\n");
-      printf("Miner exited unexpectedly");
+      printf("Miner exited unexpectedly\n");
       return EXIT_FAILURE;
     }
 
     if (n != (ssize_t)sizeof(ok)) {
       perror("Error leyendo en la tubería l->m");
-      printf("Miner exited unexpectedly");
+      printf("Miner exited unexpectedly\n");
       return EXIT_FAILURE;
     }
 
     if (ok != 1) {
       fprintf(stderr, "Error leyendo en la tubería l->m, ok=(%d)\n", ok);
-      printf("Miner exited unexpectedly");
+      printf("Miner exited unexpectedly\n");
       return EXIT_FAILURE;
     }
 
