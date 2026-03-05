@@ -108,7 +108,7 @@ int main(int argc, char* argv[]) {
   n_threads = atoi(argv[3]);
   if (target < 0 || n_rounds < 0 || n_threads < 0) {
     perror("Invalid arguments\n");
-    return -1;
+    exit(EXIT_FAILURE);
   }
 
   /* Pipe Miner->Logger */

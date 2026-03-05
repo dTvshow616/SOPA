@@ -33,4 +33,4 @@ run: $(EXEC)
 	./$(EXEC) 0 500 30
 
 valgrind: $(EXEC)
-	valgrind -s --show-leak-kinds=all --track-origins=yes --leak-check=full ./$(EXEC) 0 500 35
+	valgrind -s --show-leak-kinds=all --track-origins=yes --leak-check=full ./$(EXEC) 0 10 10 > valgrind.data
