@@ -9,9 +9,10 @@
 /* La descripcion de las librerias a continuacion se ha sacado del man siempre que se podia */
 #include <fcntl.h>    /* manipulate file descriptor */
 #include <pthread.h>  /* POSIX threads */
+#include <semaphore.h>/* Semaphores to manage the different processes*/
 #include <stdint.h>   /* exact-width integer types */
 #include <stdio.h>    /* standard input/output library functions */
-#include <stdlib.h>   /* numeric conversion functions, pseudo-random numbers generation functions, memory allocation, process control functions */
+#include <stdlib.h> /* numeric conversion functions, pseudo-random numbers generation functions, memory allocation, process control functions */
 #include <sys/wait.h> /* wait for process to change state */
 #include <unistd.h>   /* POSIX operating system API */
 
