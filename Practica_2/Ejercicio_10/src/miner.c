@@ -14,6 +14,7 @@
 #include <stdio.h>    /* standard input/output library functions */
 #include <stdlib.h> /* numeric conversion functions, pseudo-random numbers generation functions, memory allocation, process control functions */
 #include <sys/wait.h> /* wait for process to change state */
+#include <time.h>     /*Tiempitos*/
 #include <unistd.h>   /* POSIX operating system API */
 
 #include "pow.h" /* Librería interna para el POW */
@@ -41,7 +42,7 @@ typedef struct {
  * @brief Estructura para registrar los tiempos de ejecución del programa
  */
 typedef struct time_aa {
-  int n_rounds;  /* Número de rondas */
+  int n_secs;    /* Número de segundos */
   int n_threads; /* Número de threads */
   double time;   /* Tiempo medio de reloj */
 } TIME_AA, *PTIME_AA;
@@ -58,15 +59,15 @@ typedef struct time_aa {
 int childLogger(int read_fd, int write_fd);
 
 /**
- * @brief Minero completo: hace n_rounds rondas, y cada ronda el siguiente target pasa a ser la solución encontrada.
+ * @brief Minero completo: hace n_secs rondas, y cada ronda el siguiente target pasa a ser la solución encontrada.
  *
  * @param target Número a buscar
- * @param n_rounds Número de rondas a realizar
+ * @param n_secs Tiempo a estar minando
  * @param n_threads Número de hilos a emplear
  * @param write_fd Parte de la tubería sobre la que escribir
  * @return EXIT_FAILURE si hubo algún error, EXIT_SUCCESS si no
  */
-int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_fd, TIME_AA* time);
+int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd, TIME_AA* time);
 
 /**
  * @brief Función privada que resuelve una ronda usando un cierto número hilos.
@@ -93,21 +94,20 @@ int found = 0;     /* Variable de control para que los hilos sepan si ya se ha e
 int solution = -1; /* Variable para guardar la solución encontrada por los hilos */
 
 int main(int argc, char* argv[]) {
-  int target, n_rounds, n_threads, res = 0;
+  int target, n_threads, res, n_secs = 0;
   pid_t pid;
   TIME_AA time;
   FILE* f = NULL;
 
   /* CdE */
-  if (argc != 4) {
+  if (argc != 3) {
     return -1;
   }
 
   /* Extraemos las variables de la línea de argumentos */
-  target = atoi(argv[1]);
-  n_rounds = atoi(argv[2]);
-  n_threads = atoi(argv[3]);
-  if (target < 0 || n_rounds < 0 || n_threads < 0) {
+  n_secs = atoi(argv[1]);
+  n_threads = atoi(argv[2]);
+  if (target < 0 || n_secs < 0 || n_threads < 0) {
     perror("Invalid arguments\n");
     exit(EXIT_FAILURE);
   }
@@ -146,7 +146,7 @@ int main(int argc, char* argv[]) {
     close(fd_ml[0]); /* No lee en Miner->Logger */
     close(fd_lm[1]); /* No escribe en Logger->Miner */
 
-    res = parentMiner(target, n_rounds, n_threads, fd_ml[1], fd_lm[0], &time);
+    res = parentMiner(target, n_secs, n_threads, fd_ml[1], fd_lm[0], &time);
 
     close(fd_ml[1]); /* Importante: EOF al logger cuando acabe */
     close(fd_lm[0]);
@@ -163,7 +163,7 @@ int main(int argc, char* argv[]) {
     return -1;
   }
 
-  fprintf(f, "%i\t%i\t%i\t%f\n", target, time.n_rounds, time.n_threads, time.time);
+  fprintf(f, "%i\t%i\t%i\t%f\n", target, time.n_secs, time.n_threads, time.time);
 
   fclose(f);
 
@@ -263,78 +263,78 @@ int childLogger(int read_fd, int write_fd) {
 }
 
 /**
- * @brief Minero completo: hace n_rounds rondas, y cada ronda el siguiente target pasa a ser la solución encontrada.
+ * @brief Minero completo: hace n_secs rondas, y cada ronda el siguiente target pasa a ser la solución encontrada.
  */
-int parentMiner(int target, int n_rounds, int n_threads, int write_fd, int read_fd, TIME_AA* time) {
-  int sol, ok, random = 0;
-  int r = 1;
+int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd, TIME_AA* time) {
+  int sol, ok, random, r = 0;
   clock_t start, end;
   ssize_t n = 0;
   msg_t m;
 
   start = clock();
 
-  for (r = 1; r <= n_rounds; r++) {
-    sol = minerRound(target, n_threads);
+  (alarm(n_secs));
 
-    /* Registar tiempos */
-    end = clock();
-    time->n_rounds = n_rounds;
-    time->n_threads = n_threads;
-    time->time = (end - start) / CLOCKS_PER_SEC;
+  sol = minerRound(target, n_threads);
 
-    if (sol < 0) {
-      fprintf(stderr, "Error: no se encontró solución en ronda %d\n", r);
-      printf("Miner exited unexpectedly\n");
-      return EXIT_FAILURE;
-    }
-    /* Para comprobar el apartado b) */
-    printf("Solution accepted: %08d --> %d\n", target, sol);
+  /* Registar tiempos */
+  end = clock();
+  time->n_secs = n_secs;
+  time->n_threads = n_threads;
+  time->time = (end - start) / CLOCKS_PER_SEC;
 
-    m.round = r;
-    m.target = target;
-    m.solution = sol;
-
-    random = (rand() % 10) + 1;
-    if (random > 9) {
-      m.accepted = 0;
-    } else {
-      m.accepted = 1;
-    }
-
-    /* Enviar el mensaje con la solución encontrada */
-    if (write(write_fd, &m, sizeof(m)) == -1) {
-      perror("write(pipe)");
-      printf("Miner exited unexpectedly\n");
-      return EXIT_FAILURE;
-    }
-
-    /* Esperar al OK del logger */
-    n = read(read_fd, &ok, sizeof(ok));
-
-    if (n == 0) {
-      fprintf(stderr, "Miner: logger cerró la pipe antes de tiempo\n");
-      printf("Miner exited unexpectedly\n");
-      return EXIT_FAILURE;
-    }
-
-    if (n != (ssize_t)sizeof(ok)) {
-      perror("Error leyendo en la tubería l->m");
-      printf("Miner exited unexpectedly\n");
-      return EXIT_FAILURE;
-    }
-
-    if (ok != 1) {
-      fprintf(stderr, "Error leyendo en la tubería l->m, ok=(%d)\n", ok);
-      printf("Miner exited unexpectedly\n");
-      return EXIT_FAILURE;
-    }
-
-    /* Siguiente ronda */
-    target = sol; /* Siguiente objetivo para la siguiente ronda = solución actual */
-    sol = -1;     /* Reiniciar variables de control para la siguiente ronda */
-    found = 0;    /* Reiniciar variables de control para la siguiente ronda */
+  if (sol < 0) {
+    fprintf(stderr, "Error: no se encontró solución %d\n", r);
+    printf("Miner exited unexpectedly\n");
+    return EXIT_FAILURE;
   }
+  /* Para comprobar el apartado b) */
+  printf("Solution accepted: %08d --> %d\n", target, sol);
+
+  m.round = r;
+  m.target = target;
+  m.solution = sol;
+
+  random = (rand() % 10) + 1;
+  if (random > 9) {
+    m.accepted = 0;
+  } else {
+    m.accepted = 1;
+  }
+
+  /* Enviar el mensaje con la solución encontrada */
+  if (write(write_fd, &m, sizeof(m)) == -1) {
+    perror("write(pipe)");
+    printf("Miner exited unexpectedly\n");
+    return EXIT_FAILURE;
+  }
+
+  /* Esperar al OK del logger */
+  n = read(read_fd, &ok, sizeof(ok));
+
+  if (n == 0) {
+    fprintf(stderr, "Miner: logger cerró la pipe antes de tiempo\n");
+    printf("Miner exited unexpectedly\n");
+    return EXIT_FAILURE;
+  }
+
+  if (n != (ssize_t)sizeof(ok)) {
+    perror("Error leyendo en la tubería l->m");
+    printf("Miner exited unexpectedly\n");
+    return EXIT_FAILURE;
+  }
+
+  if (ok != 1) {
+    fprintf(stderr, "Error leyendo en la tubería l->m, ok=(%d)\n", ok);
+    printf("Miner exited unexpectedly\n");
+    return EXIT_FAILURE;
+  }
+
+  /* Siguiente ronda */
+  target = sol; /* Siguiente objetivo para la siguiente ronda = solución actual */
+  sol = -1;     /* Reiniciar variables de control para la siguiente ronda */
+  found = 0;    /* Reiniciar variables de control para la siguiente ronda */
+  r++;
 
   /* Enviar mensaje de finalización */
   m.round = 0;
