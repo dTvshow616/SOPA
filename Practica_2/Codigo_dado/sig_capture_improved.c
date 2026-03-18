@@ -33,7 +33,7 @@ int main(void) {
    * extendido, que se usa cuando se incluye SA_SIGINFO como bandera, permite añadir información adicional
    * @param sa_mask [sigset_t sa_mask]  máscara de señales adicionales que se bloquearán durante la ejecución del manejador (la señal que se captura
    * se bloquea por defecto, salvo que se indique lo contrario).
-   * @param sa_flags [int sa_flags] banderas para modi car el comportamiento
+   * @param sa_flags [int sa_flags] banderas para modidicar el comportamiento
    */
   struct sigaction act;
 
