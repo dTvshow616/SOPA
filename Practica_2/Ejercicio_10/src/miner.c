@@ -24,9 +24,10 @@
 #define VOTES_FILE "votes.txt"    /* El archivo que contiene los votos */
 #define WINNER_FILE "winner.txt"  /* El archivo que contiene el ganador */
 #define MAX_VOTE_WAIT 50          /* Tiempo máximo a esperar por los votos de los mineros (en segundos) */
-#define MINERS_FILE "miners.txt"  /* Fichero que comparten los mineros */
+#define MINERS_FILE "miners.txt"  /* Fichero que comparten los mineros para guardar los mineros participando*/
 #define SEM_MUTEX "/miners_mutex" /* Semáforo para gestionar el acceso al fichero de mineros */
-
+#define PARTICIPANTS_FILE \
+  "participants.txt" /* Fichero que comparten los mineros para guardar el número de participantes activos en la ronda actual*/
 /**
  * @brief Estructura para pasar argumentos a los hilos
  */
@@ -142,7 +143,11 @@ static void clear_winner_file(void);
 static void append_vote(pid_t pid, char vote);
 static void count_votes(int* yes, int* no);
 static void wait_for_usr1(void);
-/*static void wait_for_usr2(void);*/
+static void wait_for_usr2(void);
+static void clear_participants_file(void);
+static void append_participant(pid_t pid);
+static int count_participants(void);
+static void broadcast_signal_to_participants(int sig);
 
 int main(int argc, char* argv[]) {
   int target = 0;
@@ -200,6 +205,7 @@ int main(int argc, char* argv[]) {
       write_target_file(0);
       clear_text_file(VOTES_FILE);
       clear_text_file(WINNER_FILE);
+      clear_participants_file();
 
       printf("Initial target created: 0\n");
 
@@ -363,6 +369,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       break;
     }
     got_usr1 = 0;
+    append_participant(getpid());
 
     if (!read_target_file(&current_target)) {
       current_target = 0;
@@ -390,11 +397,11 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       write_target_file(sol);
       clear_text_file(VOTES_FILE);
 
-      broadcast_signal_to_miners(SIGUSR2);
+      broadcast_signal_to_participants(SIGUSR2);
 
       append_vote(getpid(), (pow_hash(sol) == current_target) ? 'Y' : 'N');
 
-      expected = count_current_miners();
+      expected = count_participants();
 
       for (int i = 0; i < MAX_VOTE_WAIT; ++i) {
         count_votes(&yes, &no);
@@ -438,6 +445,10 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
         return EXIT_FAILURE;
       }
 
+      clear_participants_file();
+      broadcast_signal_to_miners(SIGUSR1);
+      got_usr1 = 1;
+
       current_target = sol;
       target = sol;
       r++;
@@ -448,9 +459,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       continue;
     }
 
-    while (!got_usr2 && !stop) {
-      pause();
-    }
+    wait_for_usr2();
     if (stop) {
       break;
     }
@@ -463,10 +472,10 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
 
     append_vote(getpid(), (pow_hash(proposed) == current_target) ? 'Y' : 'N');
 
-    while (!got_usr1 && !stop) {
-      pause();
-    }
+    wait_for_usr1();
     got_usr1 = 0;
+    got_usr2 = 0;
+
     current_target = proposed;
     target = proposed;
   }
@@ -967,13 +976,109 @@ static void count_votes(int* yes, int* no) {
 }
 
 static void wait_for_usr1(void) {
+  sigset_t mask, oldmask;
+
+  sigemptyset(&mask);
+  sigaddset(&mask, SIGUSR1);
+
+  /* Bloquear SIGUSR1 */
+  sigprocmask(SIG_BLOCK, &mask, &oldmask);
+
   while (!got_usr1 && !stop) {
-    pause();
+    sigsuspend(&oldmask); /* espera con señales desbloqueadas */
   }
+
+  /* Restaurar máscara */
+  sigprocmask(SIG_SETMASK, &oldmask, NULL);
 }
 
-/*static void wait_for_usr2(void) {
+static void wait_for_usr2(void) {
+  sigset_t mask, oldmask;
+
+  sigemptyset(&mask);
+  sigaddset(&mask, SIGUSR2);
+
+  sigprocmask(SIG_BLOCK, &mask, &oldmask);
+
   while (!got_usr2 && !stop) {
-    pause();
+    sigsuspend(&oldmask);
   }
-}*/
+
+  sigprocmask(SIG_SETMASK, &oldmask, NULL);
+}
+
+static void clear_participants_file(void) { clear_text_file(PARTICIPANTS_FILE); }
+
+static void append_participant(pid_t pid) {
+  sem_t* sem = open_mutex();
+  FILE* f = NULL;
+
+  if (sem_wait(sem) < 0) {
+    perror("sem_wait");
+    sem_close(sem);
+    exit(EXIT_FAILURE);
+  }
+
+  f = fopen(PARTICIPANTS_FILE, "a");
+  if (!f) {
+    perror("fopen");
+    sem_post(sem);
+    sem_close(sem);
+    exit(EXIT_FAILURE);
+  }
+
+  fprintf(f, "%d\n", (int)pid);
+  fclose(f);
+
+  sem_post(sem);
+  sem_close(sem);
+}
+
+static int count_participants(void) {
+  sem_t* sem = open_mutex();
+  FILE* f = NULL;
+  int p, count = 0;
+
+  if (sem_wait(sem) < 0) {
+    perror("sem_wait");
+    sem_close(sem);
+    exit(EXIT_FAILURE);
+  }
+
+  f = fopen(PARTICIPANTS_FILE, "r");
+  if (f) {
+    while (fscanf(f, "%d", &p) == 1) {
+      count++;
+    }
+    fclose(f);
+  }
+
+  sem_post(sem);
+  sem_close(sem);
+  return count;
+}
+
+static void broadcast_signal_to_participants(int sig) {
+  sem_t* sem = open_mutex();
+  FILE* f = NULL;
+  int p;
+
+  if (sem_wait(sem) < 0) {
+    perror("sem_wait");
+    sem_close(sem);
+    exit(EXIT_FAILURE);
+  }
+
+  f = fopen(PARTICIPANTS_FILE, "r");
+  if (f) {
+    while (fscanf(f, "%d", &p) == 1) {
+      if (p != (int)getpid()) {
+        kill((pid_t)p, sig);
+      }
+    }
+    fclose(f);
+  }
+
+  sem_post(sem);
+  sem_close(sem);
+}

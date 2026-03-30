@@ -26,12 +26,13 @@ clean:
 	@rm -f $(OBJ_DIR)/miner.o $(OBJ_DIR)/pow.o $(EXEC)
 	@rm miners.txt target.txt votes.txt winner.txt
 
+run: $(EXEC)
+	./$(EXEC) 10 8000 & ./$(EXEC) 20 8000 & ./$(EXEC) 30 8000  
+
+
 toss:
 	@echo "Limpiando logs generados..."
 	@rm *.log
-
-run: $(EXEC)
-	./$(EXEC) 0 500 30
 
 valgrind: $(EXEC)
 	valgrind -s --show-leak-kinds=all --track-origins=yes --leak-check=full ./$(EXEC) 0 10 10 > valgrind.data
