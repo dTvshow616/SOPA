@@ -10,6 +10,7 @@
 #include <fcntl.h>    /* manipulate file descriptor */
 #include <pthread.h>  /* POSIX threads */
 #include <semaphore.h>/* Semaphores to manage the different processes*/
+#include <signal.h>   /* Signal handling */
 #include <stdint.h>   /* exact-width integer types */
 #include <stdio.h>    /* standard input/output library functions */
 #include <stdlib.h> /* numeric conversion functions, pseudo-random numbers generation functions, memory allocation, process control functions */
@@ -18,6 +19,9 @@
 #include <unistd.h>   /* POSIX operating system API */
 
 #include "pow.h" /* Librería interna para el POW */
+
+#define MINERS_FILE "miners.txt"  /* Fichero que comparten los mineros */
+#define SEM_MUTEX "/miners_mutex" /* Semáforo para gestionar el acceso al fichero de mineros */
 
 /**
  * @brief Estructura para pasar argumentos a los hilos
@@ -87,14 +91,35 @@ int minerRound(int target, int n_threads);
  */
 static void* minerWorker(void* arg);
 
+/**
+ * @brief Añade un nuevo minero al sistema
+ * @param pid el PID del nuevo minero
+ */
+void add_miner(pid_t pid);
+
+/**
+ * @brief Elimina un minero del sistema
+ * @param pid el PID del minero a eliminar
+ */
+void remove_miner(pid_t pid);
+
+/**
+ * @brief Handler para la señal SIGALRM, se encarga de marcar la variable stop para que el minero sepa que ha llegado el momento
+ * de parar
+ * @param sig el número de la señal recibida
+ */
+void handler(int sig);
 /* Variables globales */
-int fd_ml[2];      /* fd[0] para leer, fd[1] para escribir, ml(miner --> logger) */
-int fd_lm[2];      /* fd[0] para leer, fd[1] para escribir, lm(logger --> miner) */
-int found = 0;     /* Variable de control para que los hilos sepan si ya se ha encontrado la solución */
-int solution = -1; /* Variable para guardar la solución encontrada por los hilos */
+int fd_ml[2];                   /* fd[0] para leer, fd[1] para escribir, ml(miner --> logger) */
+int fd_lm[2];                   /* fd[0] para leer, fd[1] para escribir, lm(logger --> miner) */
+int found = 0;                  /* Variable de control para que los hilos sepan si ya se ha encontrado la solución */
+int solution = -1;              /* Variable para guardar la solución encontrada por los hilos */
+volatile sig_atomic_t stop = 0; /* Variable de control para que el minero sepa cuándo parar */
 
 int main(int argc, char* argv[]) {
-  int target, n_threads, res, n_secs = 0;
+  // TODO: CMB: Antes se pasaba como argumento el target, pero ahora como no se pasa se inicializa a 0.
+  int target = 0;
+  int n_threads, res, n_secs = 0;
   pid_t pid;
   TIME_AA time;
   FILE* f = NULL;
@@ -146,6 +171,8 @@ int main(int argc, char* argv[]) {
     close(fd_ml[0]); /* No lee en Miner->Logger */
     close(fd_lm[1]); /* No escribe en Logger->Miner */
 
+    add_miner(getpid()); /* Añadir el minero al fichero */
+
     res = parentMiner(target, n_secs, n_threads, fd_ml[1], fd_lm[0], &time);
 
     close(fd_ml[1]); /* Importante: EOF al logger cuando acabe */
@@ -168,6 +195,7 @@ int main(int argc, char* argv[]) {
   fclose(f);
 
   wait(NULL);
+  remove_miner(getpid());
   exit(EXIT_SUCCESS);
 
   return 0;
@@ -263,6 +291,15 @@ int childLogger(int read_fd, int write_fd) {
 }
 
 /**
+ * @brief Handler para la señal SIGALRM, se encarga de marcar la variable stop para que el minero sepa que ha llegado el momento
+ * de parar
+ */
+void handler(int sig) {
+  (void)sig;
+  stop = 1;
+}
+
+/**
  * @brief Minero completo: hace n_secs rondas, y cada ronda el siguiente target pasa a ser la solución encontrada.
  */
 int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd, TIME_AA* time) {
@@ -273,79 +310,82 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
 
   start = clock();
 
+  stop = 0;
+  signal(SIGALRM, handler);
   (alarm(n_secs));
 
-  sol = minerRound(target, n_threads);
+  while (!stop) {
+    sol = minerRound(target, n_threads);
 
-  /* Registar tiempos */
-  end = clock();
-  time->n_secs = n_secs;
-  time->n_threads = n_threads;
-  time->time = (end - start) / CLOCKS_PER_SEC;
+    /* Registar tiempos */
+    end = clock();
+    time->n_secs = n_secs;
+    time->n_threads = n_threads;
+    time->time = (end - start) / CLOCKS_PER_SEC;
 
-  if (sol < 0) {
-    fprintf(stderr, "Error: no se encontró solución %d\n", r);
-    printf("Miner exited unexpectedly\n");
-    return EXIT_FAILURE;
-  }
-  /* Para comprobar el apartado b) */
-  printf("Solution accepted: %08d --> %d\n", target, sol);
+    if (sol < 0) {
+      fprintf(stderr, "Error: no se encontró solución %d\n", r);
+      printf("Miner exited unexpectedly\n");
+      return EXIT_FAILURE;
+    }
+    /* Para comprobar el apartado b) */
+    printf("Solution accepted: %08d --> %d\n", target, sol);
 
-  m.round = r;
-  m.target = target;
-  m.solution = sol;
+    m.round = r;
+    m.target = target;
+    m.solution = sol;
 
-  random = (rand() % 10) + 1;
-  if (random > 9) {
+    random = (rand() % 10) + 1;
+    if (random > 9) {
+      m.accepted = 0;
+    } else {
+      m.accepted = 1;
+    }
+
+    /* Enviar el mensaje con la solución encontrada */
+    if (write(write_fd, &m, sizeof(m)) == -1) {
+      perror("write(pipe)");
+      printf("Miner exited unexpectedly\n");
+      return EXIT_FAILURE;
+    }
+
+    /* Esperar al OK del logger */
+    n = read(read_fd, &ok, sizeof(ok));
+    if (n == 0) {
+      fprintf(stderr, "Miner: logger cerró la pipe antes de tiempo\n");
+      printf("Miner exited unexpectedly\n");
+      return EXIT_FAILURE;
+    }
+
+    if (n != (ssize_t)sizeof(ok)) {
+      perror("Error leyendo en la tubería l->m");
+      printf("Miner exited unexpectedly\n");
+      return EXIT_FAILURE;
+    }
+
+    if (ok != 1) {
+      fprintf(stderr, "Error leyendo en la tubería l->m, ok=(%d)\n", ok);
+      printf("Miner exited unexpectedly\n");
+      return EXIT_FAILURE;
+    }
+
+    /* Siguiente ronda */
+    target = sol; /* Siguiente objetivo para la siguiente ronda = solución actual */
+    sol = -1;     /* Reiniciar variables de control para la siguiente ronda */
+    found = 0;    /* Reiniciar variables de control para la siguiente ronda */
+    r++;
+
+    /* Enviar mensaje de finalización */
+    m.round = 0;
+    m.target = -1;
+    m.solution = -1;
     m.accepted = 0;
-  } else {
-    m.accepted = 1;
-  }
 
-  /* Enviar el mensaje con la solución encontrada */
-  if (write(write_fd, &m, sizeof(m)) == -1) {
-    perror("write(pipe)");
-    printf("Miner exited unexpectedly\n");
-    return EXIT_FAILURE;
-  }
-
-  /* Esperar al OK del logger */
-  n = read(read_fd, &ok, sizeof(ok));
-
-  if (n == 0) {
-    fprintf(stderr, "Miner: logger cerró la pipe antes de tiempo\n");
-    printf("Miner exited unexpectedly\n");
-    return EXIT_FAILURE;
-  }
-
-  if (n != (ssize_t)sizeof(ok)) {
-    perror("Error leyendo en la tubería l->m");
-    printf("Miner exited unexpectedly\n");
-    return EXIT_FAILURE;
-  }
-
-  if (ok != 1) {
-    fprintf(stderr, "Error leyendo en la tubería l->m, ok=(%d)\n", ok);
-    printf("Miner exited unexpectedly\n");
-    return EXIT_FAILURE;
-  }
-
-  /* Siguiente ronda */
-  target = sol; /* Siguiente objetivo para la siguiente ronda = solución actual */
-  sol = -1;     /* Reiniciar variables de control para la siguiente ronda */
-  found = 0;    /* Reiniciar variables de control para la siguiente ronda */
-  r++;
-
-  /* Enviar mensaje de finalización */
-  m.round = 0;
-  m.target = -1;
-  m.solution = -1;
-  m.accepted = 0;
-
-  if (write(write_fd, &m, sizeof(m)) == -1) {
-    perror("write(pipe)");
-    printf("Miner exited unexpectedly\n");
-    return EXIT_FAILURE;
+    if (write(write_fd, &m, sizeof(m)) == -1) {
+      perror("write(pipe)");
+      printf("Miner exited unexpectedly\n");
+      return EXIT_FAILURE;
+    }
   }
 
   printf("Miner exited with status %d\n", EXIT_SUCCESS);
@@ -443,4 +483,116 @@ static void* minerWorker(void* arg) {
   }
 
   return NULL;
+}
+
+/**
+ * @brief Añade un nuevo minero al sistema
+ */
+void add_miner(pid_t pid) {
+  sem_t* sem;
+  FILE* f;
+
+  sem = sem_open(SEM_MUTEX, O_CREAT, 0644, 1);
+  if (sem == SEM_FAILED) {
+    perror("sem_open");
+    exit(EXIT_FAILURE);
+  }
+
+  sem_wait(sem);
+
+  f = fopen(MINERS_FILE, "a+");
+  if (!f) {
+    perror("fopen");
+    sem_post(sem);
+    exit(EXIT_FAILURE);
+  }
+
+  fprintf(f, "%d\n", pid);
+  fclose(f);
+
+  printf("Miner %d added to system\n", pid);
+
+  /* Mostrar todos */
+  f = fopen(MINERS_FILE, "r");
+  if (f) {
+    int p;
+    printf("Current miners: ");
+    while (fscanf(f, "%d", &p) == 1) {
+      printf("%d ", p);
+    }
+    printf("\n");
+    fclose(f);
+  }
+
+  sem_post(sem);
+  sem_close(sem);
+}
+
+/**
+ * @brief Elimina un minero del sistema
+ */
+void remove_miner(pid_t pid) {
+  sem_t* sem;
+  FILE *f, *temp;
+  int p;
+  int empty = 1;
+
+  sem = sem_open(SEM_MUTEX, 0);
+  if (sem == SEM_FAILED) {
+    perror("sem_open");
+    exit(EXIT_FAILURE);
+  }
+
+  sem_wait(sem);
+
+  f = fopen(MINERS_FILE, "r");
+  temp = fopen("temp.txt", "w");
+
+  if (!f || !temp) {
+    perror("fopen");
+    sem_post(sem);
+    exit(EXIT_FAILURE);
+  }
+
+  /* Copiar todos excepto el minero que se elimina */
+  while (fscanf(f, "%d", &p) == 1) {
+    if (p != pid) {
+      fprintf(temp, "%d\n", p);
+    }
+  }
+
+  fclose(f);
+  fclose(temp);
+
+  rename("temp.txt", MINERS_FILE);
+
+  printf("Miner %d exited system\n", pid);
+
+  /* Comprobar si el fichero está vacío */
+  f = fopen(MINERS_FILE, "r");
+  if (f) {
+    if (fscanf(f, "%d", &p) == 1) {
+      empty = 0;
+    }
+    fclose(f);
+  }
+
+  if (empty) {
+    printf("No miners left. Cleaning system...\n");
+    remove(MINERS_FILE);
+    sem_unlink(SEM_MUTEX);
+  } else {
+    f = fopen(MINERS_FILE, "r");
+    if (f) {
+      printf("Current miners: ");
+      while (fscanf(f, "%d", &p) == 1) {
+        printf("%d ", p);
+      }
+      printf("\n");
+      fclose(f);
+    }
+  }
+
+  sem_post(sem);
+  sem_close(sem);
 }
