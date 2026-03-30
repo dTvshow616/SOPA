@@ -24,6 +24,7 @@ $(OBJ_DIR)/miner.o: $(SRC_DIR)/miner.c $(INCLUDE_DIR)/pow.h
 clean:
 	@echo "Limpiando archivos generados..."
 	@rm -f $(OBJ_DIR)/miner.o $(OBJ_DIR)/pow.o $(EXEC)
+	@rm miners.txt target.txt votes.txt winner.txt
 
 toss:
 	@echo "Limpiando logs generados..."
