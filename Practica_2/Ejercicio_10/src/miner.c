@@ -130,11 +130,16 @@ volatile sig_atomic_t stop = 0; /* Variable de control para que el minero sepa c
 volatile sig_atomic_t got_usr1 = 0;
 volatile sig_atomic_t got_usr2 = 0;
 
+static sigset_t blocked_set;
+static sigset_t wait_usr1_mask;
+static sigset_t wait_usr2_mask;
+
 /* Funciones auxiliares */
 static void setup_signal_handlers(void);
 static void handler_sigalrm(int sig);
 static void handler_sigusr1(int sig);
 static void handler_sigusr2(int sig);
+static void init_signal_masks(void);
 
 static sem_t* open_mutex(void);
 static int count_current_miners(void);
@@ -201,13 +206,21 @@ int main(int argc, char* argv[]) {
     close(fd_ml[0]);
     close(fd_lm[1]);
 
+    init_signal_masks();
+
+    if (pthread_sigmask(SIG_BLOCK, &blocked_set, NULL) != 0) {
+      perror("pthread_sigmask");
+      exit(EXIT_FAILURE);
+    }
+
     setup_signal_handlers();
 
     is_first = add_miner(getpid());
 
     if (is_first) {
       while (count_current_miners() < 2 && !stop) {
-        usleep(100000);
+        got_usr1 = 0;
+        wait_for_usr1();
       }
 
       if (!stop) {
@@ -361,7 +374,6 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
 
   start = clock();
 
-  signal(SIGALRM, handler_sigalrm);
   alarm(n_secs);
 
   while (!stop) {
@@ -809,6 +821,9 @@ static void setup_signal_handlers(void) {
   struct sigaction act;
 
   sigemptyset(&act.sa_mask);
+  sigaddset(&act.sa_mask, SIGUSR1);
+  sigaddset(&act.sa_mask, SIGUSR2);
+  sigaddset(&act.sa_mask, SIGALRM);
   act.sa_flags = 0;
 
   act.sa_handler = handler_sigalrm;
@@ -828,6 +843,21 @@ static void setup_signal_handlers(void) {
     perror("sigaction(SIGUSR2)");
     exit(EXIT_FAILURE);
   }
+}
+
+static void init_signal_masks(void) {
+  sigemptyset(&blocked_set);
+  sigaddset(&blocked_set, SIGUSR1);
+  sigaddset(&blocked_set, SIGUSR2);
+  sigaddset(&blocked_set, SIGALRM);
+
+  wait_usr1_mask = blocked_set;
+  sigdelset(&wait_usr1_mask, SIGUSR1);
+  sigdelset(&wait_usr1_mask, SIGALRM);
+
+  wait_usr2_mask = blocked_set;
+  sigdelset(&wait_usr2_mask, SIGUSR2);
+  sigdelset(&wait_usr2_mask, SIGALRM);
 }
 
 static void handler_sigalrm(int sig) {
@@ -1100,35 +1130,15 @@ static void count_votes(int* yes, int* no, char* votes_str, size_t votes_str_siz
 }
 
 static void wait_for_usr1(void) {
-  sigset_t mask, oldmask;
-
-  sigemptyset(&mask);
-  sigaddset(&mask, SIGUSR1);
-
-  /* Bloquear SIGUSR1 */
-  sigprocmask(SIG_BLOCK, &mask, &oldmask);
-
   while (!got_usr1 && !stop) {
-    sigsuspend(&oldmask); /* espera con señales desbloqueadas */
+    sigsuspend(&wait_usr1_mask);
   }
-
-  /* Restaurar máscara */
-  sigprocmask(SIG_SETMASK, &oldmask, NULL);
 }
 
 static void wait_for_usr2(void) {
-  sigset_t mask, oldmask;
-
-  sigemptyset(&mask);
-  sigaddset(&mask, SIGUSR2);
-
-  sigprocmask(SIG_BLOCK, &mask, &oldmask);
-
   while (!got_usr2 && !stop) {
-    sigsuspend(&oldmask);
+    sigsuspend(&wait_usr2_mask);
   }
-
-  sigprocmask(SIG_SETMASK, &oldmask, NULL);
 }
 
 static void clear_participants_file(void) { clear_text_file(PARTICIPANTS_FILE); }
