@@ -7,6 +7,7 @@
  */
 
 /* La descripcion de las librerias a continuacion se ha sacado del man siempre que se podia */
+#include <errno.h>    /* errno, EINTR */
 #include <fcntl.h>    /* manipulate file descriptor */
 #include <pthread.h>  /* POSIX threads */
 #include <semaphore.h>/* Semaphores to manage the different processes*/
@@ -41,10 +42,13 @@ typedef struct {
  * @brief Estructura para enviar mensajes entre procesos
  */
 typedef struct {
-  int round;    /* Número de rondas */
-  int target;   /* Número a buscar */
-  int solution; /* Mandar -1 al finalizalizar las rondas */
+  int round;    /* Número de ronda*/
+  int target;   /* Objetivo a alcanzar */
+  int solution; /* Solución encontrada */
   int accepted; /* 1 si la solución es aceptada, 0 si no lo es */
+  int yes;      /* Número de votos afirmativos */
+  int no;       /* Número de votos negativos */
+  int coins;    /* Número de monedas ganadas */
 } msg_t;
 
 /**
@@ -141,7 +145,7 @@ static void broadcast_signal_to_miners(int sig);
 static int claim_winner(pid_t pid, int solution);
 static void clear_winner_file(void);
 static void append_vote(pid_t pid, char vote);
-static void count_votes(int* yes, int* no);
+static void count_votes(int* yes, int* no, char* votes_str, size_t votes_str_size);
 static void wait_for_usr1(void);
 static void wait_for_usr2(void);
 static void clear_participants_file(void);
@@ -200,6 +204,9 @@ int main(int argc, char* argv[]) {
     setup_signal_handlers();
 
     is_first = add_miner(getpid());
+    if (!is_first && count_current_miners() == 2) {
+      got_usr1 = 1;
+    }
 
     if (is_first) {
       write_target_file(0);
@@ -208,20 +215,6 @@ int main(int argc, char* argv[]) {
       clear_participants_file();
 
       printf("Initial target created: 0\n");
-
-      broadcast_signal_to_miners(SIGUSR1);
-      got_usr1 = 1;
-    }
-
-    if (count_current_miners() == 1) {
-      write_target_file(0);
-      clear_text_file(VOTES_FILE);
-      clear_text_file(WINNER_FILE);
-
-      printf("Initial target created: 0\n");
-
-      broadcast_signal_to_miners(SIGUSR1);
-      got_usr1 = 1;
     }
 
     res = parentMiner(target, n_secs, n_threads, fd_ml[1], fd_lm[0], &time);
@@ -244,7 +237,6 @@ int main(int argc, char* argv[]) {
   fclose(f);
 
   wait(NULL);
-  remove_miner(getpid());
   exit(EXIT_SUCCESS);
 
   return 0;
@@ -310,7 +302,7 @@ int childLogger(int read_fd, int write_fd) {
               "Solution: %d (validated)\n"
               "Votes:    %d/%d\n"
               "Wallets:  %jd:%d\n\n",
-              m.round, (intmax_t)ppid, m.target, m.solution, m.round, m.round, (intmax_t)ppid, m.round);
+              m.round, (intmax_t)ppid, m.target, m.solution, m.yes, (m.yes + m.no), (intmax_t)ppid, m.coins);
     } else {
       dprintf(out,
               "Id:       %d\n"
@@ -319,7 +311,7 @@ int childLogger(int read_fd, int write_fd) {
               "Solution: %d (rejected)\n"
               "Votes:    %d/%d\n"
               "Wallets:  %jd:%d\n\n",
-              m.round, (intmax_t)ppid, m.target, m.solution, m.round, m.round, (intmax_t)ppid, m.round);
+              m.round, (intmax_t)ppid, m.target, m.solution, m.yes, (m.yes + m.no), (intmax_t)ppid, m.coins);
     }
 
     /* Enviar OK al minero para que continúe */
@@ -351,10 +343,13 @@ void handler(int sig) {
  */
 int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd, TIME_AA* time) {
   int sol, ok, r = 0;
+  int coins = 0;
   clock_t start, end;
   ssize_t n = 0;
   msg_t m;
   int current_target = target;
+  char votes_str[256];
+  int expected_participants = 0;
 
   start = clock();
 
@@ -362,6 +357,12 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
   alarm(n_secs);
 
   while (!stop) {
+    if (count_current_miners() < 2) {
+      got_usr1 = 0;
+      wait_for_usr1();
+      continue;
+    }
+
     if (!got_usr1) {
       wait_for_usr1();
     }
@@ -369,7 +370,28 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       break;
     }
     got_usr1 = 0;
+
+    if (count_current_miners() < 2) {
+      continue;
+    }
+
     append_participant(getpid());
+
+    /* Dar un pequeño margen para que todos los mineros de esta ronda se apunten */
+    for (int w = 0; w < 5 && !stop; w++) {
+      usleep(100000);
+    }
+
+    /* Fijar cuántos participantes reales tiene esta ronda */
+    expected_participants = count_participants();
+
+    /* Si al cerrar la lista hay menos de 2, no hay ronda */
+    if (count_current_miners() < 2 || expected_participants < 2) {
+      clear_participants_file();
+      clear_winner_file();
+      got_usr1 = 0;
+      continue;
+    }
 
     if (!read_target_file(&current_target)) {
       current_target = 0;
@@ -401,24 +423,29 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
 
       append_vote(getpid(), (pow_hash(sol) == current_target) ? 'Y' : 'N');
 
-      expected = count_participants();
-
+      expected = expected_participants;
       for (int i = 0; i < MAX_VOTE_WAIT; ++i) {
-        count_votes(&yes, &no);
+        votes_str[0] = '\0';
+        count_votes(&yes, &no, votes_str, sizeof(votes_str));
         if ((yes + no) >= expected) {
           break;
         }
         usleep(100000);
       }
 
-      count_votes(&yes, &no);
-
-      printf("Winner %d => [ %d Y %d N ] => %s\n", (int)getpid(), yes, no, (yes >= no) ? "Accepted" : "Rejected");
+      count_votes(&yes, &no, votes_str, sizeof(votes_str));
+      printf("Winner %d => [ %s] => %s\n", (int)getpid(), votes_str, (yes >= no) ? "Accepted" : "Rejected");
+      if (yes >= no) {
+        coins++;
+      }
 
       m.round = r;
       m.target = current_target;
       m.solution = sol;
       m.accepted = (yes >= no) ? 1 : 0;
+      m.yes = yes;
+      m.no = no;
+      m.coins = coins;
 
       if (write(write_fd, &m, sizeof(m)) == -1) {
         perror("write(pipe)");
@@ -446,16 +473,19 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       }
 
       clear_participants_file();
-      broadcast_signal_to_miners(SIGUSR1);
-      got_usr1 = 1;
+      clear_winner_file();
 
       current_target = sol;
       target = sol;
       r++;
-      clear_winner_file();
 
-      broadcast_signal_to_miners(SIGUSR1);
-      got_usr1 = 1;
+      if (count_current_miners() >= 2) {
+        broadcast_signal_to_miners(SIGUSR1);
+        got_usr1 = 1;
+      } else {
+        got_usr1 = 0;
+      }
+
       continue;
     }
 
@@ -472,18 +502,19 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
 
     append_vote(getpid(), (pow_hash(proposed) == current_target) ? 'Y' : 'N');
 
-    wait_for_usr1();
-    got_usr1 = 0;
-    got_usr2 = 0;
-
     current_target = proposed;
     target = proposed;
   }
+
+  remove_miner(getpid());
 
   m.round = 0;
   m.target = -1;
   m.solution = -1;
   m.accepted = 0;
+  m.yes = 0;
+  m.no = 0;
+  m.coins = 0;
 
   if (write(write_fd, &m, sizeof(m)) == -1) {
     perror("write(pipe)");
@@ -592,6 +623,7 @@ int add_miner(pid_t pid) {
   sem_t* sem;
   FILE* f;
   int is_first = 0;
+  int count_before = 0;
   int tmp;
 
   sem = sem_open(SEM_MUTEX, O_CREAT, 0644, 1);
@@ -600,7 +632,13 @@ int add_miner(pid_t pid) {
     exit(EXIT_FAILURE);
   }
 
-  sem_wait(sem);
+  while (sem_wait(sem) < 0) {
+    if (errno != EINTR) {
+      perror("sem_wait");
+      sem_close(sem);
+      exit(EXIT_FAILURE);
+    }
+  }
 
   f = fopen(MINERS_FILE, "a+");
   if (!f) {
@@ -609,19 +647,20 @@ int add_miner(pid_t pid) {
     exit(EXIT_FAILURE);
   }
 
-  /* Comprobar si estaba vacío ANTES de añadir */
   rewind(f);
-  if (fscanf(f, "%d", &tmp) != 1) {
+  while (fscanf(f, "%d", &tmp) == 1) {
+    count_before++;
+  }
+
+  if (count_before == 0) {
     is_first = 1;
   }
 
-  /* Añadir este minero */
   fprintf(f, "%d\n", pid);
   fclose(f);
 
   printf("Miner %d added to system\n", pid);
 
-  /* Mostrar todos */
   f = fopen(MINERS_FILE, "r");
   if (f) {
     int p;
@@ -635,6 +674,11 @@ int add_miner(pid_t pid) {
 
   sem_post(sem);
   sem_close(sem);
+
+  /* Si antes había uno solo, ya hay 2: arrancar la primera ronda */
+  if (count_before == 1) {
+    broadcast_signal_to_miners(SIGUSR1);
+  }
 
   return is_first;
 }
@@ -654,7 +698,13 @@ void remove_miner(pid_t pid) {
     exit(EXIT_FAILURE);
   }
 
-  sem_wait(sem);
+  while (sem_wait(sem) < 0) {
+    if (errno != EINTR) {
+      perror("sem_wait");
+      sem_close(sem);
+      exit(EXIT_FAILURE);
+    }
+  }
 
   f = fopen(MINERS_FILE, "r");
   temp = fopen("temp.txt", "w");
@@ -691,7 +741,12 @@ void remove_miner(pid_t pid) {
   if (empty) {
     printf("No miners left. Cleaning system...\n");
     remove(MINERS_FILE);
+    remove(TARGET_FILE);
+    remove(VOTES_FILE);
+    remove(WINNER_FILE);
+    remove(PARTICIPANTS_FILE);
     sem_unlink(SEM_MUTEX);
+
   } else {
     f = fopen(MINERS_FILE, "r");
     if (f) {
@@ -763,10 +818,12 @@ static void clear_text_file(const char* path) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
 
-  if (sem_wait(sem) < 0) {
-    perror("sem_wait");
-    sem_close(sem);
-    exit(EXIT_FAILURE);
+  while (sem_wait(sem) < 0) {
+    if (errno != EINTR) {
+      perror("sem_wait");
+      sem_close(sem);
+      exit(EXIT_FAILURE);
+    }
   }
 
   f = fopen(path, "w");
@@ -786,10 +843,12 @@ static void write_target_file(int target) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
 
-  if (sem_wait(sem) < 0) {
-    perror("sem_wait");
-    sem_close(sem);
-    exit(EXIT_FAILURE);
+  while (sem_wait(sem) < 0) {
+    if (errno != EINTR) {
+      perror("sem_wait");
+      sem_close(sem);
+      exit(EXIT_FAILURE);
+    }
   }
 
   f = fopen(TARGET_FILE, "w");
@@ -812,10 +871,12 @@ static int read_target_file(int* target) {
   FILE* f = NULL;
   int ok = 0;
 
-  if (sem_wait(sem) < 0) {
-    perror("sem_wait");
-    sem_close(sem);
-    exit(EXIT_FAILURE);
+  while (sem_wait(sem) < 0) {
+    if (errno != EINTR) {
+      perror("sem_wait");
+      sem_close(sem);
+      exit(EXIT_FAILURE);
+    }
   }
 
   f = fopen(TARGET_FILE, "r");
@@ -836,10 +897,12 @@ static int count_current_miners(void) {
   FILE* f = NULL;
   int p, count = 0;
 
-  if (sem_wait(sem) < 0) {
-    perror("sem_wait");
-    sem_close(sem);
-    exit(EXIT_FAILURE);
+  while (sem_wait(sem) < 0) {
+    if (errno != EINTR) {
+      perror("sem_wait");
+      sem_close(sem);
+      exit(EXIT_FAILURE);
+    }
   }
 
   f = fopen(MINERS_FILE, "r");
@@ -860,10 +923,12 @@ static void broadcast_signal_to_miners(int sig) {
   FILE* f = NULL;
   int p;
 
-  if (sem_wait(sem) < 0) {
-    perror("sem_wait");
-    sem_close(sem);
-    exit(EXIT_FAILURE);
+  while (sem_wait(sem) < 0) {
+    if (errno != EINTR) {
+      perror("sem_wait");
+      sem_close(sem);
+      exit(EXIT_FAILURE);
+    }
   }
 
   f = fopen(MINERS_FILE, "r");
@@ -886,10 +951,12 @@ static int claim_winner(pid_t pid, int solution) {
   int old_pid = 0, old_solution = 0;
   int already_claimed = 0;
 
-  if (sem_wait(sem) < 0) {
-    perror("sem_wait");
-    sem_close(sem);
-    exit(EXIT_FAILURE);
+  while (sem_wait(sem) < 0) {
+    if (errno != EINTR) {
+      perror("sem_wait");
+      sem_close(sem);
+      exit(EXIT_FAILURE);
+    }
   }
 
   f = fopen(WINNER_FILE, "r");
@@ -923,10 +990,12 @@ static void append_vote(pid_t pid, char vote) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
 
-  if (sem_wait(sem) < 0) {
-    perror("sem_wait");
-    sem_close(sem);
-    exit(EXIT_FAILURE);
+  while (sem_wait(sem) < 0) {
+    if (errno != EINTR) {
+      perror("sem_wait");
+      sem_close(sem);
+      exit(EXIT_FAILURE);
+    }
   }
 
   f = fopen(VOTES_FILE, "a");
@@ -944,19 +1013,26 @@ static void append_vote(pid_t pid, char vote) {
   sem_close(sem);
 }
 
-static void count_votes(int* yes, int* no) {
+static void count_votes(int* yes, int* no, char* votes_str, size_t votes_str_size) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
   int pid;
   char vote;
+  size_t used = 0;
 
   *yes = 0;
   *no = 0;
 
-  if (sem_wait(sem) < 0) {
-    perror("sem_wait");
-    sem_close(sem);
-    exit(EXIT_FAILURE);
+  if (votes_str && votes_str_size > 0) {
+    votes_str[0] = '\0';
+  }
+
+  while (sem_wait(sem) < 0) {
+    if (errno != EINTR) {
+      perror("sem_wait");
+      sem_close(sem);
+      exit(EXIT_FAILURE);
+    }
   }
 
   f = fopen(VOTES_FILE, "r");
@@ -966,6 +1042,14 @@ static void count_votes(int* yes, int* no) {
         (*yes)++;
       } else if (vote == 'N') {
         (*no)++;
+      }
+
+      if (votes_str && votes_str_size > 0) {
+        int n = snprintf(votes_str + used, votes_str_size - used, "%c ", vote);
+        if (n < 0 || (size_t)n >= votes_str_size - used) {
+          break;
+        }
+        used += (size_t)n;
       }
     }
     fclose(f);
@@ -1013,10 +1097,12 @@ static void append_participant(pid_t pid) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
 
-  if (sem_wait(sem) < 0) {
-    perror("sem_wait");
-    sem_close(sem);
-    exit(EXIT_FAILURE);
+  while (sem_wait(sem) < 0) {
+    if (errno != EINTR) {
+      perror("sem_wait");
+      sem_close(sem);
+      exit(EXIT_FAILURE);
+    }
   }
 
   f = fopen(PARTICIPANTS_FILE, "a");
@@ -1039,10 +1125,12 @@ static int count_participants(void) {
   FILE* f = NULL;
   int p, count = 0;
 
-  if (sem_wait(sem) < 0) {
-    perror("sem_wait");
-    sem_close(sem);
-    exit(EXIT_FAILURE);
+  while (sem_wait(sem) < 0) {
+    if (errno != EINTR) {
+      perror("sem_wait");
+      sem_close(sem);
+      exit(EXIT_FAILURE);
+    }
   }
 
   f = fopen(PARTICIPANTS_FILE, "r");
@@ -1063,10 +1151,12 @@ static void broadcast_signal_to_participants(int sig) {
   FILE* f = NULL;
   int p;
 
-  if (sem_wait(sem) < 0) {
-    perror("sem_wait");
-    sem_close(sem);
-    exit(EXIT_FAILURE);
+  while (sem_wait(sem) < 0) {
+    if (errno != EINTR) {
+      perror("sem_wait");
+      sem_close(sem);
+      exit(EXIT_FAILURE);
+    }
   }
 
   f = fopen(PARTICIPANTS_FILE, "r");
