@@ -29,6 +29,7 @@
 #define SEM_MUTEX "/miners_mutex" /* Semáforo para gestionar el acceso al fichero de mineros */
 #define PARTICIPANTS_FILE \
   "participants.txt" /* Fichero que comparten los mineros para guardar el número de participantes activos en la ronda actual*/
+
 /**
  * @brief Estructura para pasar argumentos a los hilos
  */
@@ -121,42 +122,144 @@ void remove_miner(pid_t pid);
  */
 void handler(int sig);
 
-/* Variables globales */
-int fd_ml[2];                   /* fd[0] para leer, fd[1] para escribir, ml(miner --> logger) */
-int fd_lm[2];                   /* fd[0] para leer, fd[1] para escribir, lm(logger --> miner) */
-int found = 0;                  /* Variable de control para que los hilos sepan si ya se ha encontrado la solución */
-int solution = -1;              /* Variable para guardar la solución encontrada por los hilos */
-volatile sig_atomic_t stop = 0; /* Variable de control para que el minero sepa cuándo parar */
-volatile sig_atomic_t got_usr1 = 0;
-volatile sig_atomic_t got_usr2 = 0;
-
-static sigset_t blocked_set;
-static sigset_t wait_usr1_mask;
-static sigset_t wait_usr2_mask;
-
 /* Funciones auxiliares */
+
+/**
+ * @brief Funcion para configurar los handlers de las señales SIGALRM, SIGUSR1 y SIGUSR2
+ */
 static void setup_signal_handlers(void);
+
+/**
+ * @brief Función para manejar la señal de alarma.
+ */
 static void handler_sigalrm(int sig);
+
+/**
+ * @brief Función para manejar la señal de inicio de ronda.
+ */
 static void handler_sigusr1(int sig);
+
+/**
+ * @brief Función para manejar la señal de inicio de votación.
+ */
 static void handler_sigusr2(int sig);
+
+/**
+ * @brief Función para inicializar las máscaras de señales usadas para bloquear y esperar señales en el minero
+ */
 static void init_signal_masks(void);
 
+/**
+ * @brief Función para abrir el semáforo para manejar el acceso a los ficheros comunes
+ * @return el semáforo abierto, o NULL si hubo un error
+ */
 static sem_t* open_mutex(void);
+
+/**
+ * @brief Función para contar el número de mineros actuales en el sistema
+ * @return el número de mineros actuales
+ */
 static int count_current_miners(void);
+
+/**
+ * @brief Función para escribir el target a buscar en el archivo de targets
+ * @param target el target a escribir
+ */
 static void write_target_file(int target);
+
+/**
+ * @brief Función para leer el target a buscar del archivo de targets
+ * @param target puntero al entero donde guardar el target leído
+ * @return 1 si se leyó el target correctamente, 0 si no
+ */
 static int read_target_file(int* target);
+
+/**
+ * @brief Función para limpiar un archivo de texto
+ * @param path la ruta del archivo a limpiar
+ */
 static void clear_text_file(const char* path);
+
+/**
+ * @brief Función para mandar la señal indicada a los mineros del sistema
+ * @param sig la señal a mandar
+ */
 static void broadcast_signal_to_miners(int sig);
+
+/**
+ * @brief Función para declararse winner de la ronda
+ * @param pid Pid del proceso que ha ganado
+ * @param solution Solucion encontrada para la ronda actual
+ *
+ * @return 1 si se declaró ganador correctamente, 0 si no
+ */
 static int claim_winner(pid_t pid, int solution);
+
+/**
+ * @brief Función para limpiar el archivo de ganador
+ */
 static void clear_winner_file(void);
+
+/**
+ * @brief Funcion para añadir un voto al archivo de votos
+ * @param pid Pid del proceso que vota
+ * @param vote El voto que hace el proceso (Y yes, N no)
+ */
 static void append_vote(pid_t pid, char vote);
+
+/**
+ * @brief Función para contar los votos en un archivo
+ * @param yes puntero al entero donde guardar el número de votos positivos
+ * @param no puntero al entero donde guardar el número de votos negativos
+ * @param votes_str puntero a la cadena donde guardar los votos leídos
+ * @param votes_str_size tamaño de la cadena de votos
+ */
 static void count_votes(int* yes, int* no, char* votes_str, size_t votes_str_size);
+
+/**
+ * @brief Función para esperar la señal SIGUSR1
+ */
 static void wait_for_usr1(void);
+
+/**
+ * @brief Función para esperar la señal SIGUSR2
+ */
 static void wait_for_usr2(void);
+
+/**
+ * @brief Función para limpiar el archivo de participantes activos en la ronda actual
+ */
 static void clear_participants_file(void);
+
+/**
+ * @brief Funcion para añadir un proceso al archivo de participantes de la ronda
+ * @param pid Pid del proceso a añadir al archivo
+ */
 static void append_participant(pid_t pid);
+
+/**
+ * @brief Función para contar el número de participantes activos en la ronda actual
+ * @return el número de participantes activos en la ronda actual
+ */
 static int count_participants(void);
+
+/**
+ * @brief Función para mandar una señal a todos los participantes de la ronda actual
+ */
 static void broadcast_signal_to_participants(int sig);
+
+/* Variables globales */
+int fd_ml[2];                       /* fd[0] para leer, fd[1] para escribir, ml(miner --> logger) */
+int fd_lm[2];                       /* fd[0] para leer, fd[1] para escribir, lm(logger --> miner) */
+int found = 0;                      /* Variable de control para que los hilos sepan si ya se ha encontrado la solución */
+int solution = -1;                  /* Variable para guardar la solución encontrada por los hilos */
+volatile sig_atomic_t stop = 0;     /* Variable de control para que el minero sepa que se tiene que  parar */
+volatile sig_atomic_t got_usr1 = 0; /* Variable de control para que el minero sepa que se ha recibido SIGUSR1 */
+volatile sig_atomic_t got_usr2 = 0; /* Variable de control para que el minero sepa que se ha recibido SIGUSR2 */
+
+static sigset_t blocked_set;    /* Máscara de señales bloqueadas durante la ejecución normal del minero */
+static sigset_t wait_usr1_mask; /* Máscara de señales para esperar SIGUSR1 */
+static sigset_t wait_usr2_mask; /* Máscara de señales para esperar SIGUSR2 */
 
 int main(int argc, char* argv[]) {
   int target = 0;
