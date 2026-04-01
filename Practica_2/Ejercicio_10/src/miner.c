@@ -245,6 +245,7 @@ static int count_participants(void);
 
 /**
  * @brief Función para mandar una señal a todos los participantes de la ronda actual
+ * @param sig la señal a mandar
  */
 static void broadcast_signal_to_participants(int sig);
 
