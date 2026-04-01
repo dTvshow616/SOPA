@@ -265,10 +265,10 @@ static sigset_t wait_usr2_mask; /* Máscara de señales para esperar SIGUSR2 */
 int main(int argc, char* argv[]) {
   int target = 0;
   int n_threads, res, n_secs = 0;
+  int is_first = 0;
   pid_t pid;
   TIME_AA time;
   FILE* f = NULL;
-  int is_first = 0;
 
   if (argc != 3) {
     return -1;
@@ -310,6 +310,7 @@ int main(int argc, char* argv[]) {
     close(fd_ml[0]);
     close(fd_lm[1]);
 
+    /* Bloquear la entrada de señales para que no se pierdan */
     init_signal_masks();
 
     if (pthread_sigmask(SIG_BLOCK, &blocked_set, NULL) != 0) {
@@ -317,10 +318,11 @@ int main(int argc, char* argv[]) {
       exit(EXIT_FAILURE);
     }
 
+    /* Configurar los manejadores de señales */
     setup_signal_handlers();
 
+    /* Crear un minero y mirar si es el primero o no*/
     is_first = add_miner(getpid());
-
     if (is_first) {
       while (count_current_miners() < 2 && !stop) {
         got_usr1 = 0;
@@ -340,6 +342,7 @@ int main(int argc, char* argv[]) {
       }
     }
 
+    /* Comenzar a minar */
     res = parentMiner(target, n_secs, n_threads, fd_ml[1], fd_lm[0], &time);
 
     close(fd_ml[1]);
@@ -469,24 +472,27 @@ void handler(int sig) {
 int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd, TIME_AA* time) {
   int sol, ok, r = 0;
   int coins = 0;
+  int current_target = target;
+  int expected_participants = 0;
+  int proposed = 0;
+  char votes_str[256];
   clock_t start, end;
   ssize_t n = 0;
   msg_t m;
-  int current_target = target;
-  char votes_str[256];
-  int expected_participants = 0;
 
   start = clock();
 
   alarm(n_secs);
 
   while (!stop) {
+    /* Esperar a que haya al menos dos mineros*/
     if (count_current_miners() < 2) {
       got_usr1 = 0;
       wait_for_usr1();
       continue;
     }
 
+    /* Esperar a señal de comenzar ronda */
     if (!got_usr1) {
       wait_for_usr1();
     }
@@ -495,10 +501,12 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     }
     got_usr1 = 0;
 
+    /* Comprobar que sigue habiendo al menos dos mineros*/
     if (count_current_miners() < 2) {
       continue;
     }
 
+    /* Apuntarse a la ronda actual */
     append_participant(getpid());
 
     /* Dar un pequeño margen para que todos los mineros de esta ronda se apunten */
@@ -509,6 +517,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     /* Fijar cuántos participantes reales tiene esta ronda */
     expected_participants = count_participants();
 
+    /* Si no hay suficientes participantes se aborta la ronda*/
     if (count_current_miners() < 2 || expected_participants < 2) {
       got_usr1 = 0;
       continue;
@@ -522,6 +531,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     found = 0;
     solution = -1;
 
+    /* Comenzar a minar esta ronda */
     sol = minerRound(current_target, n_threads);
 
     if (count_current_miners() < 2 || expected_participants < 2) {
@@ -538,6 +548,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       break;
     }
 
+    /* Si es el primer minero en encontrar una solución */
     if (sol >= 0 && claim_winner(getpid(), sol)) {
       int yes = 0, no = 0;
       int expected;
@@ -554,6 +565,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
         clear_participants_file();
         clear_winner_file();
 
+        /* Si hay suficientes mineros para una nueva ronda se manda la señal para comenzar*/
         if (count_current_miners() >= 2) {
           broadcast_signal_to_miners(SIGUSR1);
           got_usr1 = 1;
@@ -564,6 +576,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
         continue;
       }
 
+      /* Contar votos*/
       for (int i = 0; i < MAX_VOTE_WAIT; ++i) {
         votes_str[0] = '\0';
         count_votes(&yes, &no, votes_str, sizeof(votes_str));
@@ -575,7 +588,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
 
       count_votes(&yes, &no, votes_str, sizeof(votes_str));
 
-      /* NUEVO: si ya solo queda uno, o no han llegado todos los votos esperados,
+      /* Si ya solo queda uno, o no han llegado todos los votos esperados,
          esta ronda no se acepta ni se imprime */
       if (count_current_miners() < 2 || (yes + no) < expected) {
         clear_participants_file();
@@ -591,6 +604,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
         continue;
       }
 
+      /* Imprimir resultados */
       printf("Winner %d => [ %s] => %s\n", (int)getpid(), votes_str, (yes >= no) ? "Accepted" : "Rejected");
 
       if (yes >= no) {
@@ -630,6 +644,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
         return EXIT_FAILURE;
       }
 
+      /* Resetear ficheros y variables para siguiente ronda */
       clear_participants_file();
       clear_winner_file();
 
@@ -653,7 +668,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     }
     got_usr2 = 0;
 
-    int proposed = 0;
+    proposed = 0;
     if (!read_target_file(&proposed)) {
       proposed = current_target;
     }
@@ -664,6 +679,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     target = proposed;
   }
 
+  /* Se acaba su tiempo de minería */
   m.round = 0;
   m.target = -1;
   m.solution = -1;
