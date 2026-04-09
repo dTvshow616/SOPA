@@ -669,9 +669,19 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     }
     got_usr2 = 0;
 
-    proposed = 0;
-    if (!read_target_file(&proposed)) {
-      proposed = current_target;
+    proposed = current_target;
+    int proposed_read = 0;
+    for (int retry = 0; retry < 5; retry++) {
+      if (read_target_file(&proposed)) {
+        proposed_read = 1;
+        break;
+      }
+      usleep(100000);
+    }
+
+    if (!proposed_read) {
+      fprintf(stderr, "Warning: failed to read proposed solution from %s, using current target %d for vote\n", TARGET_FILE,
+              current_target);
     }
 
     append_vote(getpid(), (pow_hash(proposed) == current_target) ? 'Y' : 'N');
