@@ -14,9 +14,9 @@
 #include <signal.h>   /* Signal handling */
 #include <stdint.h>   /* exact-width integer types */
 #include <stdio.h>    /* standard input/output library functions */
-#include <stdlib.h> /* numeric conversion functions, pseudo-random numbers generation functions, memory allocation, process control functions */
+#include <stdlib.h>   /* numeric conversion functions, pseudo-random numbers generation functions, memory allocation, process control functions */
 #include <sys/wait.h> /* wait for process to change state */
-#include <time.h>     /*Tiempitos*/
+#include <time.h>     /* Tiempitos */
 #include <unistd.h>   /* POSIX operating system API */
 
 #include "pow.h" /* Librería interna para el POW */
@@ -25,10 +25,11 @@
 #define VOTES_FILE "votes.txt"    /* El archivo que contiene los votos */
 #define WINNER_FILE "winner.txt"  /* El archivo que contiene el ganador */
 #define MAX_VOTE_WAIT 50          /* Tiempo máximo a esperar por los votos de los mineros (en segundos) */
-#define MINERS_FILE "miners.txt"  /* Fichero que comparten los mineros para guardar los mineros participando*/
+#define MINERS_FILE "miners.txt"  /* Fichero que comparten los mineros para guardar los mineros que están participando */
 #define SEM_MUTEX "/miners_mutex" /* Semáforo para gestionar el acceso al fichero de mineros */
-#define PARTICIPANTS_FILE \
-  "participants.txt" /* Fichero que comparten los mineros para guardar el número de participantes activos en la ronda actual*/
+#define PARTICIPANTS_FILE                                                                                              \
+  "participants.txt" /* Fichero que comparten los mineros para guardar el número de participantes activos en la ronda \
+                        actual*/
 
 /**
  * @brief Estructura para pasar argumentos a los hilos
@@ -73,7 +74,7 @@ typedef struct time_aa {
 int childLogger(int read_fd, int write_fd);
 
 /**
- * @brief Minero completo: hace n_secs rondas, y cada ronda el siguiente target pasa a ser la solución encontrada.
+ * @brief Minero completo: hace n_secs rondas, y tras cada ronda el siguiente target pasa a ser la solución encontrada.
  *
  * @param target Número a buscar
  * @param n_secs Tiempo a estar minando
@@ -84,7 +85,7 @@ int childLogger(int read_fd, int write_fd);
 int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd, TIME_AA* time);
 
 /**
- * @brief Función privada que resuelve una ronda usando un cierto número hilos.
+ * @brief Función privada que resuelve una ronda usando un cierto número de hilos.
  *
  * @param target el target a buscar
  * @param n_threads el número de hilos a emplear
@@ -96,7 +97,7 @@ int minerRound(int target, int n_threads);
  * @brief Función que ejecutan los hilos, se ponen a probar los valores posibles dentro del rango que se les asignó y si
  * encuentran la solución, marcan found=1 y guardan la solución en solution
  *
- * @param arg puntero para una estructura que guarde  argumentos entre hilos
+ * @param arg puntero para una estructura que guarde argumentos entre hilos
  * @return en nuestro caso siempre devuleve NULL pero es buenas prácticas en hilos que sean de tipo void*
  */
 static void* minerWorker(void* arg);
@@ -605,7 +606,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       }
 
       /* Imprimir resultados */
-      printf("Winner %d => [ %s] => %s\n", (int)getpid(), votes_str, (yes >= no) ? "Accepted" : "Rejected");
+      printf("Winner %d => [ %s] => %s\n", (int)getpid(), votes_str, (yes >= no) ? "\x1b[32mAccepted\x1b[0m" : "\x1b[31mRejected\x1b[0m");
 
       if (yes >= no) {
         coins++;
@@ -831,7 +832,7 @@ int add_miner(pid_t pid) {
   fprintf(f, "%d\n", pid);
   fclose(f);
 
-  printf("Miner %d added to system\n", pid);
+  printf("\x1b[34mMiner %d added to system\x1b[0m\n", pid);
 
   f = fopen(MINERS_FILE, "r");
   if (f) {
@@ -899,7 +900,7 @@ void remove_miner(pid_t pid) {
 
   rename("temp.txt", MINERS_FILE);
 
-  printf("Miner %d exited system\n", pid);
+  printf("\x1b[35mMiner %d exited system\x1b[0m\n", pid);
 
   /* Comprobar si el fichero está vacío */
   f = fopen(MINERS_FILE, "r");
