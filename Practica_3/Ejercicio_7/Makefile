@@ -1,7 +1,7 @@
 EXEC = miner
 CC = gcc -pthread
-CFLAGS = -Wall -Wextra -g -Werror -Wpedantic -O2 -I$(INCLUDE_DIR)
-
+CFLAGS = -Wall -Wextra -g -lrt -Werror -Wpedantic -O2 -I$(INCLUDE_DIR)
+# el -lrt sirve para la memoria compartida
 UNAME := $(shell uname -s)
 
 # Directorios
