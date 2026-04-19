@@ -48,6 +48,15 @@ typedef struct {
   pid_t winner;
   int winner_solution;
 
+  /* Datos del antiguo voters.txt */
+  pid_t voter[MAX_MINERS];
+  char voter_vote[MAX_MINERS];
+  int n_votes;
+
+  /* Datos del antiguo participants.txt */
+  pid_t participants[MAX_MINERS]; /* Lista de participantes activos (sus pids) */
+  int n_participants;             /* Número de participantes actual */
+
   /* Aquí van el resto de cosas, voy una por una */
 } Shared_Memory;
 

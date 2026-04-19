@@ -9,12 +9,6 @@
 #include "miner_rush.h" /* Librería que define variables y librerías globales para todos los procesos */
 #include "pow.h"        /* Librería interna para el POW */
 
-#define VOTES_FILE "votes.txt"   /* El archivo que contiene los votos */
-#define MINERS_FILE "miners.txt" /* Fichero que comparten los mineros para guardar los mineros que están participando */
-#define PARTICIPANTS_FILE                                                                                              \
-  "participants.txt" /* Fichero que comparten los mineros para guardar el número de participantes activos en la ronda \
-                        actual*/
-
 /* --------------------------------------------------- Estructuras --------------------------------------------------- */
 
 /**
@@ -110,6 +104,11 @@ void access_shared_memory();
  */
 void remove_shared_memory();
 
+/**
+ * @brief Lleva acabo el sem_wait con control de errores
+ */
+void teeny_sem_wait(sem_t* sem);
+
 /* ---------------------------------------------- Funciones auxiliares ----------------------------------------------- */
 
 /**
@@ -148,12 +147,6 @@ static sem_t* open_mutex(void);
  * @param target el target a escribir
  */
 static void register_target(int target);
-
-/**
- * @brief Función para contar el número de mineros actuales en el sistema
- * @return el número de mineros actuales
- */
-static int count_current_miners(void);
 
 /**
  * @brief Función para mandar la señal indicada a los mineros del sistema
@@ -201,12 +194,6 @@ static void wait_for_usr2(void);
  * @param pid Pid del proceso a añadir al archivo
  */
 static void append_participant(pid_t pid);
-
-/**
- * @brief Función para contar el número de participantes activos en la ronda actual
- * @return el número de participantes activos en la ronda actual
- */
-static int count_participants(void);
 
 /**
  * @brief Función para mandar una señal a todos los participantes de la ronda actual
@@ -301,7 +288,7 @@ int main(int argc, char* argv[]) {
     /* Crear un minero y mirar si es el primero o no*/
     is_first = add_miner(getpid());
     if (is_first) {
-      while (count_current_miners() < 2 && !stop) {
+      while (shm->n_miners < 2 && !stop) {
         got_usr1 = 0;
         wait_for_usr1();
       }
@@ -457,7 +444,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
 
   while (!stop) {
     /* Esperar a que haya al menos dos mineros*/
-    if (count_current_miners() < 2) {
+    if (shm->n_miners < 2) {
       got_usr1 = 0;
       wait_for_usr1();
       continue;
@@ -473,7 +460,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     got_usr1 = 0;
 
     /* Comprobar que sigue habiendo al menos dos mineros*/
-    if (count_current_miners() < 2) {
+    if (shm->n_miners < 2) {
       continue;
     }
 
@@ -486,10 +473,10 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     }
 
     /* Fijar cuántos participantes reales tiene esta ronda */
-    expected_participants = count_participants();
+    expected_participants = shm->n_participants;
 
     /* Si no hay suficientes participantes se aborta la ronda*/
-    if (count_current_miners() < 2 || expected_participants < 2) {
+    if (shm->n_miners < 2 || expected_participants < 2) {
       got_usr1 = 0;
       continue;
     }
@@ -503,7 +490,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     /* Comenzar a minar esta ronda */
     sol = minerRound(current_target, n_threads);
 
-    if (count_current_miners() < 2 || expected_participants < 2) {
+    if (shm->n_miners < 2 || expected_participants < 2) {
       got_usr1 = 0;
       continue;
     }
@@ -525,12 +512,12 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       append_vote(getpid(), (pow_hash(sol) == current_target) ? 'Y' : 'N');
 
       expected = expected_participants;
-      if (expected < 2 || count_current_miners() < 2) {
+      if (expected < 2 || shm->n_miners < 2) {
         // TODO: sustituir: clear_participants_file();
         // TODO: sustituir: clear_winner_file();
 
         /* Si hay suficientes mineros para una nueva ronda se manda la señal para comenzar*/
-        if (count_current_miners() >= 2) {
+        if (shm->n_miners >= 2) {
           broadcast_signal_to_miners(SIGUSR1);
           got_usr1 = 1;
         } else {
@@ -554,11 +541,11 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
 
       /* Si ya solo queda uno, o no han llegado todos los votos esperados,
          esta ronda no se acepta ni se imprime */
-      if (count_current_miners() < 2 || (yes + no) < expected) {
+      if (shm->n_miners < 2 || (yes + no) < expected) {
         // TODO: sustituir: clear_participants_file();
         // TODO: sustituir: clear_winner_file();
 
-        if (count_current_miners() >= 2) {
+        if (shm->n_miners >= 2) {
           broadcast_signal_to_miners(SIGUSR1);
           got_usr1 = 1;
         } else {
@@ -616,7 +603,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       target = sol;
       r++;
 
-      if (count_current_miners() >= 2) {
+      if (shm->n_miners >= 2) {
         broadcast_signal_to_miners(SIGUSR1);
         got_usr1 = 1;
       } else {
@@ -816,13 +803,7 @@ void remove_miner(pid_t pid) {
 
   /* Esperar para acceder a la información para los mineros */
   sem_t* sem = open_mutex();
-  while (sem_wait(sem) < 0) {
-    if (errno != EINTR) {
-      perror("sem_wait");
-      sem_close(sem);
-      exit(EXIT_FAILURE);
-    }
-  }
+  teeny_sem_wait(sem);
 
   /* Desapuntarse de la ronda */
   for (int i = 0; i < shm->n_miners; i++) {
@@ -985,13 +966,7 @@ static sem_t* open_mutex(void) {
 static void register_target(int target) {
   sem_t* sem = open_mutex();
 
-  while (sem_wait(sem) < 0) {
-    if (errno != EINTR) {
-      perror("sem_wait");
-      sem_close(sem);
-      exit(EXIT_FAILURE);
-    }
-  }
+  teeny_sem_wait(sem);
 
   shm->target = target;
 
@@ -1000,58 +975,17 @@ static void register_target(int target) {
 }
 
 /**
- * @brief Función para contar el número de mineros actuales en el sistema
- */
-static int count_current_miners(void) {
-  sem_t* sem = open_mutex();
-  FILE* f = NULL;
-  int p, count = 0;
-
-  while (sem_wait(sem) < 0) {
-    if (errno != EINTR) {
-      perror("sem_wait");
-      sem_close(sem);
-      exit(EXIT_FAILURE);
-    }
-  }
-
-  f = fopen(MINERS_FILE, "r");
-  if (f) {
-    while (fscanf(f, "%d", &p) == 1) {
-      count++;
-    }
-    fclose(f);
-  }
-
-  sem_post(sem);
-  sem_close(sem);
-  return count;
-}
-
-/**
  * @brief Función para mandar la señal indicada a los mineros del sistema
  */
 static void broadcast_signal_to_miners(int sig) {
   sem_t* sem = open_mutex();
-  FILE* f = NULL;
-  int p;
 
-  while (sem_wait(sem) < 0) {
-    if (errno != EINTR) {
-      perror("sem_wait");
-      sem_close(sem);
-      exit(EXIT_FAILURE);
-    }
-  }
+  teeny_sem_wait(sem);
 
-  f = fopen(MINERS_FILE, "r");
-  if (f) {
-    while (fscanf(f, "%d", &p) == 1) {
-      if (p != (int)getpid()) {
-        kill((pid_t)p, sig);
-      }
+  for (int i = 0; i < shm->n_miners; i++) {
+    if (shm->miners[i] != getpid()) {
+      kill(shm->miners[i], sig);
     }
-    fclose(f);
   }
 
   sem_post(sem);
@@ -1065,13 +999,7 @@ static int claim_winner(pid_t pid, int solution) {
   sem_t* sem = open_mutex();
   int already_claimed = 0;
 
-  while (sem_wait(sem) < 0) {
-    if (errno != EINTR) {
-      perror("sem_wait");
-      sem_close(sem);
-      exit(EXIT_FAILURE);
-    }
-  }
+  teeny_sem_wait(sem);
 
   /* Si no hay ganador, este proceso se delcara ganador */
   if (!shm->winner || !shm->winner_solution) {
@@ -1091,26 +1019,12 @@ static int claim_winner(pid_t pid, int solution) {
  */
 static void append_vote(pid_t pid, char vote) {
   sem_t* sem = open_mutex();
-  FILE* f = NULL;
 
-  while (sem_wait(sem) < 0) {
-    if (errno != EINTR) {
-      perror("sem_wait");
-      sem_close(sem);
-      exit(EXIT_FAILURE);
-    }
-  }
+  teeny_sem_wait(sem);
 
-  f = fopen(VOTES_FILE, "a");
-  if (!f) {
-    perror("fopen");
-    sem_post(sem);
-    sem_close(sem);
-    exit(EXIT_FAILURE);
-  }
-
-  fprintf(f, "%d %c\n", (int)pid, vote);
-  fclose(f);
+  shm->voter[shm->n_votes] = pid;
+  shm->voter_vote[shm->n_votes] = vote;
+  shm->n_votes++;
 
   sem_post(sem);
   sem_close(sem);
@@ -1121,8 +1035,6 @@ static void append_vote(pid_t pid, char vote) {
  */
 static void count_votes(int* yes, int* no, char* votes_str, size_t votes_str_size) {
   sem_t* sem = open_mutex();
-  FILE* f = NULL;
-  int pid;
   char vote;
   size_t used = 0;
 
@@ -1133,32 +1045,23 @@ static void count_votes(int* yes, int* no, char* votes_str, size_t votes_str_siz
     votes_str[0] = '\0';
   }
 
-  while (sem_wait(sem) < 0) {
-    if (errno != EINTR) {
-      perror("sem_wait");
-      sem_close(sem);
-      exit(EXIT_FAILURE);
-    }
-  }
+  teeny_sem_wait(sem);
 
-  f = fopen(VOTES_FILE, "r");
-  if (f) {
-    while (fscanf(f, "%d %c", &pid, &vote) == 2) {
-      if (vote == 'Y') {
-        (*yes)++;
-      } else if (vote == 'N') {
-        (*no)++;
-      }
-
-      if (votes_str && votes_str_size > 0) {
-        int n = snprintf(votes_str + used, votes_str_size - used, "%c ", vote);
-        if (n < 0 || (size_t)n >= votes_str_size - used) {
-          break;
-        }
-        used += (size_t)n;
-      }
+  for (int i = 0; i < shm->n_votes; i++) {
+    vote = shm->voter_vote[i];
+    if (vote == 'Y') {
+      (*yes)++;
+    } else if (vote == 'N') {
+      (*no)++;
     }
-    fclose(f);
+
+    if (votes_str && votes_str_size > 0) {
+      int n = snprintf(votes_str + used, votes_str_size - used, "%c ", vote);
+      if (n < 0 || (size_t)n >= votes_str_size - used) {
+        break;
+      }
+      used += (size_t)n;
+    }
   }
 
   sem_post(sem);
@@ -1188,58 +1091,14 @@ static void wait_for_usr2(void) {
  */
 static void append_participant(pid_t pid) {
   sem_t* sem = open_mutex();
-  FILE* f = NULL;
 
-  while (sem_wait(sem) < 0) {
-    if (errno != EINTR) {
-      perror("sem_wait");
-      sem_close(sem);
-      exit(EXIT_FAILURE);
-    }
-  }
+  teeny_sem_wait(sem);
 
-  f = fopen(PARTICIPANTS_FILE, "a");
-  if (!f) {
-    perror("fopen");
-    sem_post(sem);
-    sem_close(sem);
-    exit(EXIT_FAILURE);
-  }
-
-  fprintf(f, "%d\n", (int)pid);
-  fclose(f);
+  shm->participants[shm->n_participants] = pid;
+  shm->n_participants++;
 
   sem_post(sem);
   sem_close(sem);
-}
-
-/**
- * @brief Función para contar el número de participantes activos en la ronda actual
- */
-static int count_participants(void) {
-  sem_t* sem = open_mutex();
-  FILE* f = NULL;
-  int p, count = 0;
-
-  while (sem_wait(sem) < 0) {
-    if (errno != EINTR) {
-      perror("sem_wait");
-      sem_close(sem);
-      exit(EXIT_FAILURE);
-    }
-  }
-
-  f = fopen(PARTICIPANTS_FILE, "r");
-  if (f) {
-    while (fscanf(f, "%d", &p) == 1) {
-      count++;
-    }
-    fclose(f);
-  }
-
-  sem_post(sem);
-  sem_close(sem);
-  return count;
 }
 
 /**
@@ -1247,9 +1106,23 @@ static int count_participants(void) {
  */
 static void broadcast_signal_to_participants(int sig) {
   sem_t* sem = open_mutex();
-  FILE* f = NULL;
-  int p;
 
+  teeny_sem_wait(sem);
+
+  for (int i = 0; i < shm->n_participants; i++) {
+    if (shm->participants[i] != getpid()) {
+      kill(shm->participants[i], sig);
+    }
+  }
+
+  sem_post(sem);
+  sem_close(sem);
+}
+
+/**
+ * @brief Lleva acabo el sem_wait con control de errores
+ */
+void teeny_sem_wait(sem_t* sem) {
   while (sem_wait(sem) < 0) {
     if (errno != EINTR) {
       perror("sem_wait");
@@ -1257,17 +1130,4 @@ static void broadcast_signal_to_participants(int sig) {
       exit(EXIT_FAILURE);
     }
   }
-
-  f = fopen(PARTICIPANTS_FILE, "r");
-  if (f) {
-    while (fscanf(f, "%d", &p) == 1) {
-      if (p != (int)getpid()) {
-        kill((pid_t)p, sig);
-      }
-    }
-    fclose(f);
-  }
-
-  sem_post(sem);
-  sem_close(sem);
 }
