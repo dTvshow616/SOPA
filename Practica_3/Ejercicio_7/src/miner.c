@@ -9,9 +9,7 @@
 #include "miner_rush.h" /* Librería que define variables y librerías globales para todos los procesos */
 #include "pow.h"        /* Librería interna para el POW */
 
-#define TARGET_FILE "target.txt" /* El archivo que contiene el target a buscar */
 #define VOTES_FILE "votes.txt"   /* El archivo que contiene los votos */
-#define WINNER_FILE "winner.txt" /* El archivo que contiene el ganador */
 #define MINERS_FILE "miners.txt" /* Fichero que comparten los mineros para guardar los mineros que están participando */
 #define PARTICIPANTS_FILE                                                                                              \
   "participants.txt" /* Fichero que comparten los mineros para guardar el número de participantes activos en la ronda \
@@ -107,6 +105,11 @@ void handler(int sig);
  */
 void access_shared_memory();
 
+/**
+ * @brief Elimina la memoria compartida del espacio de direcciones
+ */
+void remove_shared_memory();
+
 /* ---------------------------------------------- Funciones auxiliares ----------------------------------------------- */
 
 /**
@@ -141,23 +144,10 @@ static void handler_sigusr2(int sig);
 static sem_t* open_mutex(void);
 
 /**
- * @brief Función para limpiar un archivo de texto
- * @param path la ruta del archivo a limpiar
- */
-static void clear_text_file(const char* path);
-
-/**
- * @brief Función para escribir el target a buscar en el archivo de targets
+ * @brief Función para escribir el target a buscar en la memoria compartida
  * @param target el target a escribir
  */
-static void write_target_file(int target);
-
-/**
- * @brief Función para leer el target a buscar del archivo de targets
- * @param target puntero al entero donde guardar el target leído
- * @return 1 si se leyó el target correctamente, 0 si no
- */
-static int read_target_file(int* target);
+static void register_target(int target);
 
 /**
  * @brief Función para contar el número de mineros actuales en el sistema
@@ -179,11 +169,6 @@ static void broadcast_signal_to_miners(int sig);
  * @return 1 si se declaró ganador correctamente, 0 si no
  */
 static int claim_winner(pid_t pid, int solution);
-
-/**
- * @brief Función para limpiar el archivo de ganador
- */
-static void clear_winner_file(void);
 
 /**
  * @brief Funcion para añadir un voto al archivo de votos
@@ -210,11 +195,6 @@ static void wait_for_usr1(void);
  * @brief Función para esperar la señal SIGUSR2
  */
 static void wait_for_usr2(void);
-
-/**
- * @brief Función para limpiar el archivo de participantes activos en la ronda actual
- */
-static void clear_participants_file(void);
 
 /**
  * @brief Funcion para añadir un proceso al archivo de participantes de la ronda
@@ -327,10 +307,10 @@ int main(int argc, char* argv[]) {
       }
 
       if (!stop) {
-        write_target_file(0);
-        clear_text_file(VOTES_FILE);
-        clear_text_file(WINNER_FILE);
-        clear_participants_file();
+        register_target(0);
+        // TODO clear_shared_memory?
+        // TODO: sustituir: clear_text_file(VOTES_FILE);
+        // TODO: sustituir: clear_participants_file();
 
         printf("Initial target created: 0\n");
 
@@ -353,6 +333,9 @@ int main(int argc, char* argv[]) {
 
   wait(NULL);
   remove_miner(getpid());
+
+  /* Abandonar la memoria compartida */
+  remove_shared_memory();
 
   exit(EXIT_SUCCESS);
 
@@ -511,9 +494,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       continue;
     }
 
-    if (!read_target_file(&current_target)) {
-      current_target = 0;
-    }
+    current_target = shm->target;
 
     got_usr2 = 0;
     found = 0;
@@ -536,8 +517,8 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       int yes = 0, no = 0;
       int expected;
 
-      write_target_file(sol);
-      clear_text_file(VOTES_FILE);
+      register_target(sol);
+      // TODO: sustituir: clear_text_file(VOTES_FILE);
 
       broadcast_signal_to_participants(SIGUSR2);
 
@@ -545,8 +526,8 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
 
       expected = expected_participants;
       if (expected < 2 || count_current_miners() < 2) {
-        clear_participants_file();
-        clear_winner_file();
+        // TODO: sustituir: clear_participants_file();
+        // TODO: sustituir: clear_winner_file();
 
         /* Si hay suficientes mineros para una nueva ronda se manda la señal para comenzar*/
         if (count_current_miners() >= 2) {
@@ -574,8 +555,8 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       /* Si ya solo queda uno, o no han llegado todos los votos esperados,
          esta ronda no se acepta ni se imprime */
       if (count_current_miners() < 2 || (yes + no) < expected) {
-        clear_participants_file();
-        clear_winner_file();
+        // TODO: sustituir: clear_participants_file();
+        // TODO: sustituir: clear_winner_file();
 
         if (count_current_miners() >= 2) {
           broadcast_signal_to_miners(SIGUSR1);
@@ -628,8 +609,8 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       }
 
       /* Resetear ficheros y variables para siguiente ronda */
-      clear_participants_file();
-      clear_winner_file();
+      // TODO: sustituir: clear_participants_file();
+      // TODO: sustituir: clear_winner_file();
 
       current_target = sol;
       target = sol;
@@ -651,7 +632,8 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     }
     got_usr2 = 0;
 
-    proposed = current_target;
+    proposed = shm->target;  // TODO: Revisar
+    /*proposed = current_target;
     int proposed_read = 0;
     for (int retry = 0; retry < 5; retry++) {
       if (read_target_file(&proposed)) {
@@ -663,7 +645,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
 
     if (!proposed_read) {
       fprintf(stderr, "Warning: failed to read proposed solution from %s, using current target %d for vote\n", TARGET_FILE, current_target);
-    }
+    }*/
 
     append_vote(getpid(), (pow_hash(proposed) == current_target) ? 'Y' : 'N');
 
@@ -786,11 +768,13 @@ static void* minerWorker(void* arg) {
 int add_miner(pid_t pid) {
   int is_first = 0;
   int count_before = 0;
+  sem_t* sem = open_mutex();
 
   /* Esperar para acceder a la información para los mineros */
-  while (sem_wait(shm->miners_semaphore) < 0) {
+  while (sem_wait(sem) < 0) {
     if (errno != EINTR) {
       perror("sem_wait");
+      sem_close(sem);
       exit(EXIT_FAILURE);
     }
   }
@@ -814,7 +798,7 @@ int add_miner(pid_t pid) {
   printf("\n");
 
   /* Indicar que ya está libre la información para los mineros */
-  sem_post(shm->miners_semaphore);
+  sem_post(open_mutex());
 
   /* Empezar la ronda si ya había uno, si hay más la ronda ya ha empezado */
   if (count_before == 1) {
@@ -828,16 +812,19 @@ int add_miner(pid_t pid) {
  * @brief Elimina un minero del sistema
  */
 void remove_miner(pid_t pid) {
-  int empty = 0;
+  int no_miners_left = 0;
 
-  while (sem_wait(shm->miners_semaphore) < 0) {
+  /* Esperar para acceder a la información para los mineros */
+  sem_t* sem = open_mutex();
+  while (sem_wait(sem) < 0) {
     if (errno != EINTR) {
       perror("sem_wait");
+      sem_close(sem);
       exit(EXIT_FAILURE);
     }
   }
 
-  /* Borrar el PID del array compactando */
+  /* Desapuntarse de la ronda */
   for (int i = 0; i < shm->n_miners; i++) {
     if (shm->miners[i] == pid) {
       /* Mover el último elemento a esta posición */
@@ -847,11 +834,16 @@ void remove_miner(pid_t pid) {
     }
   }
 
+  /* Print :3 */
   printf("\x1b[35mMiner %d exited system\x1b[0m\n", pid);
 
-  empty = (shm->n_miners == 0);
+  /* Comprobar si queda algún minero en el sistema */
+  if (shm->n_miners == 0) {
+    no_miners_left = 0;
+  }
 
-  if (!empty) {
+  /* Prints :3 */
+  if (!no_miners_left) {
     printf("Current miners: ");
     for (int i = 0; i < shm->n_miners; i++) {
       printf("%d ", shm->miners[i]);
@@ -859,11 +851,13 @@ void remove_miner(pid_t pid) {
     printf("\n");
   }
 
-  sem_post(shm->miners_semaphore);
+  /* Indicar que ya está libre la información para los mineros */
+  sem_post(open_mutex());
 
-  if (empty) {
-    printf("No miners left.\n");
-    /* TODO: Enviar bloque de finalización a la cola de mensajes aquí */
+  /* Terminar el programa si no quedan mineros */
+  if (no_miners_left) {
+    printf("No miners left :/\n");
+    /* TODO: Enviar bloque de finalización a la cola de mensajes */
   }
 }
 
@@ -871,17 +865,29 @@ void remove_miner(pid_t pid) {
  * @brief Accede a la región de memoria compartida llamada SHM_NAME que es de tipo Shared_Memory
  */
 void access_shared_memory() {
-  /* 1. Obtener un descriptor de fichero a la memoria compartida con shm_open */
+  /* Obtener un descriptor de fichero a la memoria compartida con shm_open */
   int fd_shm = shm_open(SHM_NAME, O_RDWR, 0);
   if (fd_shm == -1) {
     perror("shm_open");
     exit(EXIT_FAILURE);
   }
-  /* 2. Enlazar la memoria al espacio de direcciones del proceso con mmap y cerrar el descriptor de fichero con close */
+
+  /* Enlazar la memoria al espacio de direcciones del proceso con mmap y cerrar el descriptor de fichero con close */
   shm = mmap(NULL, sizeof(Shared_Memory), PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm, 0);
   close(fd_shm);
   if (shm == MAP_FAILED) {
     perror("mmap");
+    exit(EXIT_FAILURE);
+  }
+}
+
+/**
+ * @brief Elimina la memoria compartida del espacio de direcciones
+ */
+void remove_shared_memory() {
+  /* Eliminar la memoria compartida del espacio de direcciones con munmap */
+  if (munmap(NULL, sizeof(Shared_Memory)) == -1) {
+    perror("unmap");
     exit(EXIT_FAILURE);
   }
 }
@@ -965,7 +971,7 @@ static void handler_sigusr2(int sig) {
  * @brief Función para abrir el semáforo para manejar el acceso a los ficheros comunes
  */
 static sem_t* open_mutex(void) {
-  sem_t* sem = shm->miners_semaphore;
+  sem_t* sem = sem_open(SEM_NAME, 0);
   if (sem == SEM_FAILED) {
     perror("sem_open");
     exit(EXIT_FAILURE);
@@ -974,11 +980,10 @@ static sem_t* open_mutex(void) {
 }
 
 /**
- * @brief Función para limpiar un archivo de texto
+ * @brief Función para escribir el target a buscar en la memoria compartida
  */
-static void clear_text_file(const char* path) {
+static void register_target(int target) {
   sem_t* sem = open_mutex();
-  FILE* f = NULL;
 
   while (sem_wait(sem) < 0) {
     if (errno != EINTR) {
@@ -988,76 +993,10 @@ static void clear_text_file(const char* path) {
     }
   }
 
-  f = fopen(path, "w");
-  if (!f) {
-    perror("fopen");
-    sem_post(sem);
-    sem_close(sem);
-    exit(EXIT_FAILURE);
-  }
-
-  fclose(f);
-  sem_post(sem);
-  sem_close(sem);
-}
-
-/**
- * @brief Función para escribir el target a buscar en el archivo de targets
- */
-static void write_target_file(int target) {
-  sem_t* sem = open_mutex();
-  FILE* f = NULL;
-
-  while (sem_wait(sem) < 0) {
-    if (errno != EINTR) {
-      perror("sem_wait");
-      sem_close(sem);
-      exit(EXIT_FAILURE);
-    }
-  }
-
-  f = fopen(TARGET_FILE, "w");
-  if (!f) {
-    perror("fopen");
-    sem_post(sem);
-    sem_close(sem);
-    exit(EXIT_FAILURE);
-  }
-
-  fprintf(f, "%d\n", target);
-  fclose(f);
+  shm->target = target;
 
   sem_post(sem);
   sem_close(sem);
-}
-
-/**
- * @brief Función para leer el target a buscar del archivo de targets
- */
-static int read_target_file(int* target) {
-  sem_t* sem = open_mutex();
-  FILE* f = NULL;
-  int ok = 0;
-
-  while (sem_wait(sem) < 0) {
-    if (errno != EINTR) {
-      perror("sem_wait");
-      sem_close(sem);
-      exit(EXIT_FAILURE);
-    }
-  }
-
-  f = fopen(TARGET_FILE, "r");
-  if (f) {
-    if (fscanf(f, "%d", target) == 1) {
-      ok = 1;
-    }
-    fclose(f);
-  }
-
-  sem_post(sem);
-  sem_close(sem);
-  return ok;
 }
 
 /**
@@ -1124,8 +1063,6 @@ static void broadcast_signal_to_miners(int sig) {
  */
 static int claim_winner(pid_t pid, int solution) {
   sem_t* sem = open_mutex();
-  FILE* f = NULL;
-  int old_pid = 0, old_solution = 0;
   int already_claimed = 0;
 
   while (sem_wait(sem) < 0) {
@@ -1136,35 +1073,18 @@ static int claim_winner(pid_t pid, int solution) {
     }
   }
 
-  f = fopen(WINNER_FILE, "r");
-  if (f) {
-    if (fscanf(f, "%d %d", &old_pid, &old_solution) == 2) {
-      already_claimed = 1;
-    }
-    fclose(f);
-  }
-
-  if (!already_claimed) {
-    f = fopen(WINNER_FILE, "w");
-    if (!f) {
-      perror("fopen");
-      sem_post(sem);
-      sem_close(sem);
-      exit(EXIT_FAILURE);
-    }
-    fprintf(f, "%d %d\n", (int)pid, solution);
-    fclose(f);
+  /* Si no hay ganador, este proceso se delcara ganador */
+  if (!shm->winner || !shm->winner_solution) {
+    shm->winner = pid;
+    shm->winner_solution = solution;
+  } else {
+    already_claimed = 1;
   }
 
   sem_post(sem);
   sem_close(sem);
   return !already_claimed;
 }
-
-/**
- * @brief Función para limpiar el archivo de ganador
- */
-static void clear_winner_file(void) { clear_text_file(WINNER_FILE); }
 
 /**
  * @brief Funcion para añadir un voto al archivo de votos
@@ -1262,11 +1182,6 @@ static void wait_for_usr2(void) {
     sigsuspend(&wait_usr2_mask);
   }
 }
-
-/**
- * @brief Función para limpiar el archivo de participantes activos en la ronda actual
- */
-static void clear_participants_file(void) { clear_text_file(PARTICIPANTS_FILE); }
 
 /**
  * @brief Funcion para añadir un proceso al archivo de participantes de la ronda

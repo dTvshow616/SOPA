@@ -38,9 +38,15 @@ typedef struct {
  */
 typedef struct {
   /* Datos del antiguo miners.txt */
-  sem_t* miners_semaphore;  /* Semáforo para los mineros */
   pid_t miners[MAX_MINERS]; /* Lista de mineros activos (sus pids) */
   int n_miners;             /* Número de mineros actual */
+
+  /* Datos del antiguo target.txt */
+  int target; /* Número a buscar */
+
+  /* Datos del antiguo winner.txt */
+  pid_t winner;
+  int winner_solution;
 
   /* Aquí van el resto de cosas, voy una por una */
 } Shared_Memory;

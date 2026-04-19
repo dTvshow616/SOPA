@@ -51,7 +51,6 @@ void comprobador() {
  */
 void monitor() {
   int fd_shm;         /* Descriptor del fichero */
-  sem_t* sem;         /* Semáforo con nombre */
   int* mapped = NULL; /* Puntero al segmento de memoria compartida */
   /* Arranca en primer lugar y finaliza el último */
   /* Debe crear los segmentos de memoria compartida y los semáforos que compartirán los procesos del sistema */
@@ -70,7 +69,7 @@ void monitor() {
       exit(EXIT_FAILURE);
     }
   } else {
-    if (ftruncate(fd_shm, sizeof(int)) == -1) {
+    if (ftruncate(fd_shm, sizeof(Shared_Memory)) == -1) {
       perror("ftruncate");
       close(fd_shm);
       exit(EXIT_FAILURE);
@@ -78,13 +77,11 @@ void monitor() {
     printf("Shared memory segment created\n");
   }
 
-  Shared_Memory* shm = (Shared_Memory*)malloc(1 * sizeof(Shared_Memory)); /* Esto luego se mapea en miner */
-  // sem_init(&shm->miners_semaphore, 1, 1);                                     /* __pshared = 1 para que se comparta entre procesos */
+  Shared_Memory* shm = mmap(NULL, sizeof(Shared_Memory), PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm, 0);
   shm->n_miners = 0;
-  shm->miners_semaphore = sem_open(SEM_NAME, O_CREAT | O_EXCL, 0644, 1);
-  if (sem == SEM_FAILED) {
-    perror("sem_open");
-    close(fd_shm);
+  sem_init(&shm->miners_semaphore, 1, 1); /* __pshared = 1 para que se comparta entre procesos */
+  if (!shm->miners_semaphore) {
+    perror("sem_init");
     exit(EXIT_FAILURE);
   }
 
