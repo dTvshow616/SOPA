@@ -2,37 +2,26 @@
  * @file miner.c
  * @author Carlos Mendez & Ana Olsson
  * @brief Miner Rush program
- * @version 5.0
- * @date 2026-02-25
+ * @version 5.1
+ * @date 2026-04-19
  */
 
-/* La descripcion de las librerias a continuacion se ha sacado del man siempre que se podia */
-#include <errno.h>    /* errno, EINTR */
-#include <fcntl.h>    /* manipulate file descriptor */
-#include <pthread.h>  /* POSIX threads */
-#include <semaphore.h>/* Semaphores to manage the different processes*/
-#include <signal.h>   /* Signal handling */
-#include <stdint.h>   /* exact-width integer types */
-#include <stdio.h>    /* standard input/output library functions */
-#include <stdlib.h>   /* numeric conversion functions, pseudo-random numbers generation functions, memory allocation, process control functions */
-#include <sys/wait.h> /* wait for process to change state */
-#include <time.h>     /* Tiempitos */
-#include <unistd.h>   /* POSIX operating system API */
-
-#include "pow.h" /* Librería interna para el POW */
+#include "miner_rush.h" /* Librería que define variables y librerías globales para todos los procesos */
+#include "pow.h"        /* Librería interna para el POW */
 
 #define TARGET_FILE "target.txt"  /* El archivo que contiene el target a buscar */
 #define VOTES_FILE "votes.txt"    /* El archivo que contiene los votos */
 #define WINNER_FILE "winner.txt"  /* El archivo que contiene el ganador */
-#define MAX_VOTE_WAIT 50          /* Tiempo máximo a esperar por los votos de los mineros (en segundos) */
 #define MINERS_FILE "miners.txt"  /* Fichero que comparten los mineros para guardar los mineros que están participando */
 #define SEM_MUTEX "/miners_mutex" /* Semáforo para gestionar el acceso al fichero de mineros */
 #define PARTICIPANTS_FILE                                                                                              \
   "participants.txt" /* Fichero que comparten los mineros para guardar el número de participantes activos en la ronda \
                         actual*/
 
+/* --------------------------------------------------- Estructuras --------------------------------------------------- */
+
 /**
- * @brief Estructura para pasar argumentos a los hilos
+ * @brief Estructura para pasar argumentos a los hilos (Miner -> mini_miners)
  */
 typedef struct {
   int target; /* Objetivo a alcanzar */
@@ -41,7 +30,7 @@ typedef struct {
 } thread_args_t;
 
 /**
- * @brief Estructura para enviar mensajes entre procesos
+ * @brief Estructura para enviar mensajes entre los procesos Miner y Logger
  */
 typedef struct {
   int round;    /* Número de ronda*/
@@ -53,16 +42,7 @@ typedef struct {
   int coins;    /* Número de monedas ganadas */
 } msg_t;
 
-/**
- * @brief Estructura para registrar los tiempos de ejecución del programa
- */
-typedef struct time_aa {
-  int n_secs;    /* Número de segundos */
-  int n_threads; /* Número de threads */
-  double time;   /* Tiempo medio de reloj */
-} TIME_AA, *PTIME_AA;
-
-/* Funciones privadas */
+/* ----------------------------------------------- Funciones privadas ------------------------------------------------ */
 
 /**
  * @brief Se encarga de guardar en un archivo el resultado de las búsquedas
@@ -82,7 +62,7 @@ int childLogger(int read_fd, int write_fd);
  * @param write_fd Parte de la tubería sobre la que escribir
  * @return EXIT_FAILURE si hubo algún error, EXIT_SUCCESS si no
  */
-int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd, TIME_AA* time);
+int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd);
 
 /**
  * @brief Función privada que resuelve una ronda usando un cierto número de hilos.
@@ -123,7 +103,7 @@ void remove_miner(pid_t pid);
  */
 void handler(int sig);
 
-/* Funciones auxiliares */
+/* ---------------------------------------------- Funciones auxiliares ----------------------------------------------- */
 
 /**
  * @brief Funcion para configurar los handlers de las señales SIGALRM, SIGUSR1 y SIGUSR2
@@ -250,7 +230,16 @@ static int count_participants(void);
  */
 static void broadcast_signal_to_participants(int sig);
 
-/* Variables globales */
+/**
+ * @brief Abre un fichero y lo mapea
+ *
+ * @param filename el nombre del fichero
+ * @return int* un puntero a la zona de memoria mapeada
+ */
+static int* open_and_map_file(char* filename);
+
+/* ----------------------------------------------- Variables globales ------------------------------------------------ */
+
 int fd_ml[2];                       /* fd[0] para leer, fd[1] para escribir, ml(miner --> logger) */
 int fd_lm[2];                       /* fd[0] para leer, fd[1] para escribir, lm(logger --> miner) */
 int found = 0;                      /* Variable de control para que los hilos sepan si ya se ha encontrado la solución */
@@ -263,12 +252,13 @@ static sigset_t blocked_set;    /* Máscara de señales bloqueadas durante la ej
 static sigset_t wait_usr1_mask; /* Máscara de señales para esperar SIGUSR1 */
 static sigset_t wait_usr2_mask; /* Máscara de señales para esperar SIGUSR2 */
 
+/* ----------------------------------------------------- Código ------------------------------------------------------ */
+
 int main(int argc, char* argv[]) {
   int target = 0;
   int n_threads, res, n_secs = 0;
   int is_first = 0;
   pid_t pid;
-  TIME_AA time;
   FILE* f = NULL;
 
   if (argc != 3) {
@@ -344,7 +334,7 @@ int main(int argc, char* argv[]) {
     }
 
     /* Comenzar a minar */
-    res = parentMiner(target, n_secs, n_threads, fd_ml[1], fd_lm[0], &time);
+    res = parentMiner(target, n_secs, n_threads, fd_ml[1], fd_lm[0]);
 
     close(fd_ml[1]);
     close(fd_lm[0]);
@@ -354,14 +344,6 @@ int main(int argc, char* argv[]) {
       exit(EXIT_FAILURE);
     }
   }
-
-  f = fopen("tiempos.data", "a");
-  if (!f) {
-    return -1;
-  }
-
-  fprintf(f, "%i\t%i\t%i\t%f\n", target, time.n_secs, time.n_threads, time.time);
-  fclose(f);
 
   wait(NULL);
   remove_miner(getpid());
@@ -383,7 +365,7 @@ int childLogger(int read_fd, int write_fd) {
   ssize_t n = 0;
 
   /* Guardar nombre del fichero a crear en filename */
-  snprintf(filename, sizeof(filename), "%jd.log", (intmax_t)ppid);
+  snprintf(filename, sizeof(filename), "%jd.log", (intmax_t)ppid);  // TODO: Esto debería dejar de usarse
 
   /* Abrir el fichero para escribir, crear si no existe, vaciarlo si existe */
   out = open(filename, O_CREAT | O_TRUNC | O_WRONLY, 0644);
@@ -470,18 +452,15 @@ void handler(int sig) {
 /**
  * @brief Minero completo: hace n_secs rondas, y cada ronda el siguiente target pasa a ser la solución encontrada.
  */
-int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd, TIME_AA* time) {
+int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd) {
   int sol, ok, r = 0;
   int coins = 0;
   int current_target = target;
   int expected_participants = 0;
   int proposed = 0;
   char votes_str[256];
-  clock_t start, end;
   ssize_t n = 0;
   msg_t m;
-
-  start = clock();
 
   alarm(n_secs);
 
@@ -539,11 +518,6 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       got_usr1 = 0;
       continue;
     }
-
-    end = clock();
-    time->n_secs = n_secs;
-    time->n_threads = n_threads;
-    time->time = (end - start) / CLOCKS_PER_SEC;
 
     if (stop) {
       break;
@@ -680,8 +654,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     }
 
     if (!proposed_read) {
-      fprintf(stderr, "Warning: failed to read proposed solution from %s, using current target %d for vote\n", TARGET_FILE,
-              current_target);
+      fprintf(stderr, "Warning: failed to read proposed solution from %s, using current target %d for vote\n", TARGET_FILE, current_target);
     }
 
     append_vote(getpid(), (pow_hash(proposed) == current_target) ? 'Y' : 'N');
@@ -1352,4 +1325,48 @@ static void broadcast_signal_to_participants(int sig) {
 
   sem_post(sem);
   sem_close(sem);
+}
+
+static int* open_and_map_file(char* filename) {
+  /* int created = 0; */
+  int fd;
+  int* mapped = NULL;
+
+  if ((fd = open(filename, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)) == -1) {
+    if (errno == EEXIST) {
+      if ((fd = open(filename, O_RDWR, 0)) == -1) {
+        perror("open");
+        exit(EXIT_FAILURE);
+      }
+    } else {
+      perror("open");
+      exit(EXIT_FAILURE);
+    }
+  } else {
+    if (ftruncate(fd, sizeof(int)) == -1) {
+      perror("ftruncate");
+      close(fd);
+      exit(EXIT_FAILURE);
+    }
+    /* created = 1; */
+  }
+
+  if ((mapped = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)) == MAP_FAILED) {
+    perror("mmap");
+    close(fd);
+    exit(EXIT_FAILURE);
+  }
+
+  return mapped;
+
+  /*close(fd);
+
+  if (created) {
+    *mapped = 0;
+  }
+  *mapped += 1;
+  printf("Counter: %d\n", *mapped);
+  munmap(mapped, sizeof(int));
+
+  exit(EXIT_SUCCESS);*/
 }

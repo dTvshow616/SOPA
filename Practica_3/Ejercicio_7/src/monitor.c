@@ -2,28 +2,11 @@
  * @file monitor.c
  * @author Carlos Mendez & Ana Olsson
  * @brief Miner Rush program
- * @version 1.0
- * @date 2026-02-25
+ * @version 1.1
+ * @date 2026-04-19
  */
 
-/* La descripcion de las librerias a continuacion se ha sacado del man siempre que se podia */
-#include <errno.h>      /* errno, EINTR */
-#include <fcntl.h>      /* manipulate file descriptor */
-#include <pthread.h>    /* POSIX threads */
-#include <semaphore.h>  /* Semaphores to manage the different processes*/
-#include <signal.h>     /* Signal handling */
-#include <stdint.h>     /* exact-width integer types */
-#include <stdio.h>      /* standard input/output library functions */
-#include <stdlib.h>     /* numeric conversion functions, pseudo-random numbers generation functions, memory allocation, process control functions */
-#include <sys/mman.h>   // TODO documentar
-#include <sys/stat.h>   // TODO documentar
-#include <sys/types.h>  // TODO documentar
-#include <sys/wait.h>   /* wait for process to change state */
-#include <time.h>       /* Tiempitos */
-#include <unistd.h>     /* POSIX operating system API */
-
-#define SHM_NAME "dos_puntos_tres"
-#define SEM_NAME "/miners_mutex" /* Semáforo para gestionar el acceso al fichero de mineros */
+#include "miner_rush.h" /* Librería que define variables y librerías globales para todos los procesos */
 
 int main(int argc, char* argv[]) {
   /* Retraso en milisegundoes de cada cosa */
@@ -67,8 +50,9 @@ void comprobador() {
  *
  */
 void monitor() {
-  int fd_shm; /* Descriptor del fichero */
-  sem_t* sem; /* Semáforo con nombre */
+  int fd_shm;         /* Descriptor del fichero */
+  sem_t* sem;         /* Semáforo con nombre */
+  int* mapped = NULL; /* Puntero al segmento de memoria compartida */
   /* Arranca en primer lugar y finaliza el último */
   /* Debe crear los segmentos de memoria compartida y los semáforos que compartirán los procesos del sistema */
   fd_shm = shm_open(SHM_NAME, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
@@ -86,6 +70,11 @@ void monitor() {
       exit(EXIT_FAILURE);
     }
   } else {
+    if (ftruncate(fd_shm, sizeof(int)) == -1) {
+      perror("ftruncate");
+      close(fd_shm);
+      exit(EXIT_FAILURE);
+    }
     printf("Shared memory segment created\n");
   }
 
@@ -95,6 +84,7 @@ void monitor() {
     close(fd_shm);
     exit(EXIT_FAILURE);
   }
+
   // TODO: Meter el close(fd_shm);
   // TODO: Meter el shm_unlink(SHM_NAME);
   // TODO: Meter el sem_close(sem);
