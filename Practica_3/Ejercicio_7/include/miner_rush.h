@@ -2,21 +2,21 @@
 #define _MINER_RUSH_H
 
 /* La descripcion de las librerias a continuacion se ha sacado del man siempre que se podia */
-#include <errno.h>      /* Errno, EINTR */
-#include <fcntl.h>      /* Manipulate file descriptor */
-#include <mqueue.h>     /* POSIX API for message queues */
-#include <pthread.h>    /* POSIX threads */
-#include <semaphore.h>  /* Semaphores to manage the different processes*/
-#include <signal.h>     /* Signal handling */
-#include <stdint.h>     /* Exact-width integer types */
-#include <stdio.h>      /* Standard input/output library functions */
-#include <stdlib.h>     /* Numeric conversion functions, pseudo-random numbers generation functions, memory allocation, process control functions */
-#include <sys/mman.h>   /* File mapping */
-#include <sys/stat.h>   /* Display of file or file system's status */
-#include <sys/types.h>  // TODO documentar
-#include <sys/wait.h>   /* Wait for process to change state */
-#include <time.h>       /* Tiempitos */
-#include <unistd.h>     /* POSIX operating system API */
+#include <errno.h>     /* Errno, EINTR */
+#include <fcntl.h>     /* Manipulate file descriptor */
+#include <mqueue.h>    /* POSIX API for message queues */
+#include <pthread.h>   /* POSIX threads */
+#include <semaphore.h> /* Semaphores to manage the different processes*/
+#include <signal.h>    /* Signal handling */
+#include <stdint.h>    /* Exact-width integer types */
+#include <stdio.h>     /* Standard input/output library functions */
+#include <stdlib.h>    /* Numeric conversion functions, pseudo-random numbers generation functions, memory allocation, process control functions */
+#include <sys/mman.h>  /* File mapping */
+#include <sys/stat.h>  /* Display of file or file system's status */
+#include <sys/types.h> /* Defines a collection of typedef symbols and structures */
+#include <sys/wait.h>  /* Wait for process to change state */
+#include <time.h>      /* Defines four variable types, two macro and various functions for manipulating date and time */
+#include <unistd.h>    /* POSIX operating system API */
 
 #define SHM_NAME "/shared_memory" /* Memoria compartida de todos los procesos */
 #define SEM_NAME "/semaphore"     /* Semáforo para gestionar el acceso al fichero de mineros */
@@ -37,19 +37,21 @@ typedef struct {
   int target; /* Número a buscar */
 
   /* Datos del antiguo winner.txt */
-  pid_t winner;
-  int winner_solution;
+  pid_t winner;        /* PID del ganador */
+  int winner_solution; /* Solución encontrada por el ganador */
 
   /* Datos del antiguo voters.txt */
-  pid_t voter[MAX_MINERS];
-  char voter_vote[MAX_MINERS];
-  int n_votes;
+  pid_t voter[MAX_MINERS];     /* PIDs de los votantes */
+  char voter_vote[MAX_MINERS]; /* Votos de los votantes */
+  int n_votes;                 /* Número de votantes */
 
   /* Datos del antiguo participants.txt */
   pid_t participants[MAX_MINERS]; /* Lista de participantes activos (sus pids) */
   int n_participants;             /* Número de participantes actual */
 
-  /* Aquí van el resto de cosas, voy una por una */
+  /* Carteras de los mineros */
+  int wallets[MAX_MINERS];
+
 } Shared_Memory;
 
 /**
@@ -62,8 +64,8 @@ typedef struct {
 } Minero_Comprobador;
 
 /**
- * @brief Atributos de la cola de mensajes entre Minero y Comprobador, 10 es el máximo número de mensajes que acepta Linux
+ * @brief Atributos de la cola de mensajes entre Minero y Comprobador
  */
-struct mq_attr attributes = {.mq_flags = 0, .mq_maxmsg = 10, .mq_curmsgs = 0, .mq_msgsize = sizeof(Minero_Comprobador)};
+struct mq_attr attributes = {.mq_flags = 0, .mq_maxmsg = 7, .mq_curmsgs = 0, .mq_msgsize = sizeof(Minero_Comprobador)};
 
 #endif

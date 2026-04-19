@@ -164,7 +164,7 @@ static void broadcast_signal_to_miners(int sig);
 static int claim_winner(pid_t pid, int solution);
 
 /**
- * @brief Funcion para añadir un voto al archivo de votos
+ * @brief Funcion para añadir un voto a la lista de votos en la memoria compartida
  * @param pid Pid del proceso que vota
  * @param vote El voto que hace el proceso (Y yes, N no)
  */
@@ -190,7 +190,7 @@ static void wait_for_usr1(void);
 static void wait_for_usr2(void);
 
 /**
- * @brief Funcion para añadir un proceso al archivo de participantes de la ronda
+ * @brief Funcion para añadir un proceso a la lista de participantes de la ronda
  * @param pid Pid del proceso a añadir al archivo
  */
 static void append_participant(pid_t pid);
@@ -218,6 +218,7 @@ static sigset_t wait_usr1_mask; /* Máscara de señales para esperar SIGUSR1 */
 static sigset_t wait_usr2_mask; /* Máscara de señales para esperar SIGUSR2 */
 
 static Shared_Memory* shm = NULL; /* Puntero a la memoria compartida */
+static mqd_t queue;               /* La cola de mensajes */
 
 /* ----------------------------------------------------- Código ------------------------------------------------------ */
 
@@ -286,6 +287,13 @@ int main(int argc, char* argv[]) {
     /* Acceder a la memoria compartida */
     access_shared_memory();
 
+    /* Acceso a la cola de mensajes */
+    queue = mq_open(MQ_NAME, O_WRONLY, S_IRUSR | S_IWUSR, &attributes);
+    if (queue == (mqd_t)-1) {
+      perror("mq_open");
+      exit(EXIT_FAILURE);
+    }
+
     /* Crear un minero y mirar si es el primero o no*/
     is_first = add_miner(getpid());
     if (is_first) {
@@ -322,11 +330,15 @@ int main(int argc, char* argv[]) {
     }
   }
 
+  /* Ser buen padre */
   wait(NULL);
+
   remove_miner(getpid());
 
   /* Abandonar la memoria compartida */
   remove_shared_memory();
+
+  mq_close(queue);
 
   exit(EXIT_SUCCESS);
 
@@ -828,7 +840,6 @@ void remove_miner(pid_t pid) {
   int no_miners_left = 0;
   sem_t* sem = open_mutex();
   int i = 0;
-  mqd_t queue;
   Minero_Comprobador msg;
 
   /* Esperar para acceder a la información para los mineros */
@@ -869,12 +880,6 @@ void remove_miner(pid_t pid) {
     printf("No miners left :/\n");
 
     /* Enviar mensaje con finalización a la cola de mensajes */
-    queue = mq_open(MQ_NAME, O_WRONLY, S_IRUSR | S_IWUSR, &attributes);
-    if (queue == (mqd_t)-1) {
-      perror("mq_open");
-      exit(EXIT_FAILURE);
-    }
-
     msg.target = shm->target;
     msg.solution = solution;
     msg.is_last = 1;
@@ -883,8 +888,6 @@ void remove_miner(pid_t pid) {
       perror("mq_send");
       exit(EXIT_FAILURE);
     }
-
-    mq_close(queue);
   }
 }
 
@@ -999,10 +1002,12 @@ static void handler_sigusr2(int sig) {
  */
 static sem_t* open_mutex(void) {
   sem_t* sem = sem_open(SEM_NAME, 0);
+
   if (sem == SEM_FAILED) {
     perror("sem_open");
     exit(EXIT_FAILURE);
   }
+
   return sem;
 }
 
@@ -1045,7 +1050,6 @@ static void broadcast_signal_to_miners(int sig) {
 static int claim_winner(pid_t pid, int solution) {
   sem_t* sem = open_mutex();
   int already_claimed = 0;
-  mqd_t queue;
   Minero_Comprobador msg;
 
   controlled_sem_wait(sem);
@@ -1056,12 +1060,6 @@ static int claim_winner(pid_t pid, int solution) {
     shm->winner_solution = solution;
 
     /* Enviar mensaje por la cola */
-    queue = mq_open(MQ_NAME, O_WRONLY, S_IRUSR | S_IWUSR, &attributes);
-    if (queue == (mqd_t)-1) {
-      perror("mq_open");
-      exit(EXIT_FAILURE);
-    }
-
     msg.target = shm->target;
     msg.solution = solution;
     msg.is_last = 0;
@@ -1071,18 +1069,18 @@ static int claim_winner(pid_t pid, int solution) {
       exit(EXIT_FAILURE);
     }
 
-    mq_close(queue);
   } else {
     already_claimed = 1;
   }
 
   sem_post(sem);
   sem_close(sem);
+
   return !already_claimed;
 }
 
 /**
- * @brief Funcion para añadir un voto al archivo de votos
+ * @brief Funcion para añadir un voto a la lista de votos en la memoria compartida
  */
 static void append_vote(pid_t pid, char vote) {
   sem_t* sem = open_mutex();
@@ -1155,7 +1153,7 @@ static void wait_for_usr2(void) {
 }
 
 /**
- * @brief Funcion para añadir un proceso al archivo de participantes de la ronda
+ * @brief Funcion para añadir un proceso a la lista de participantes de la ronda
  */
 static void append_participant(pid_t pid) {
   sem_t* sem = open_mutex();

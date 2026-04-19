@@ -13,12 +13,12 @@
 /**
  * @brief Se encarga de mostrar la salida unificada, hijo de Comprobador
  */
-void monitor(int fd_shm, sem_t* sem);
+void monitor(int lag_monitor, int fd_shm, sem_t* sem);
 
 /**
  * @brief Se encarga de recibir los bloques por cola de mensajes y validarlos, padre de Monitor
  */
-void comprobador(mqd_t queue);
+void comprobador(int lag_comprobador, mqd_t queue);
 
 /**
  * @brief It initializes the shared memory's info
@@ -53,12 +53,13 @@ int main(int argc, char* argv[]) {
     exit(EXIT_FAILURE);
 
   } else if (pid == 0) { /* Monitor */
-    monitor(fd_shm, sem);
+    monitor(lag_monitor, fd_shm, sem);
 
   } else { /* Comprobador */
-    comprobador(queue);
+    comprobador(lag_comprobador, queue);
   }
 
+  /* Ser buen padre */
   wait(NULL);
 
   /* Cerrar y borrar la memoria compartida */
@@ -83,9 +84,9 @@ int main(int argc, char* argv[]) {
 /**
  * @brief Se encarga de mostrar la salida unificada, hijo de Comprobador
  */
-void monitor(int fd_shm, sem_t* sem) { /* REVIEW Arranca en primer lugar y finaliza el último */
-  int* mapped = NULL;                  /* Puntero al segmento de memoria compartida */
-  Shared_Memory* shm;                  /* Puntero a la memoria compartida*/
+void monitor(int lag_monitor, int fd_shm, sem_t* sem) { /* REVIEW Arranca en primer lugar y finaliza el último */
+  int* mapped = NULL;                                   /* Puntero al segmento de memoria compartida */
+  Shared_Memory* shm;                                   /* Puntero a la memoria compartida*/
 
   /* Crear los segmentos de memoria compartida que compartirán los procesos del sistema */
   fd_shm = shm_open(SHM_NAME, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
@@ -120,6 +121,8 @@ void monitor(int fd_shm, sem_t* sem) { /* REVIEW Arranca en primer lugar y final
     exit(EXIT_FAILURE);
   }
 
+  // TOD: EL resto de cosillas
+
   /* TODO Si este proceso se para, el sistema detendrá la ejecución del Comprobador (?) */
   /* TODO Si un minero arranca antes que este proceso, dará un mensaje de error y saldrá del sistema */
 }
@@ -127,7 +130,7 @@ void monitor(int fd_shm, sem_t* sem) { /* REVIEW Arranca en primer lugar y final
 /**
  * @brief Se encarga de recibir los bloques por cola de mensajes y validarlos, padre de Monitor
  */
-void comprobador(mqd_t queue) {
+void comprobador(int lag_comprobador, mqd_t queue) {
   Minero_Comprobador msg;
 
   /* Crear la cola de mensajes por donde le llegarán las soluciones a validar */
@@ -137,10 +140,24 @@ void comprobador(mqd_t queue) {
     exit(EXIT_FAILURE);
   }
 
-  /* Recibe mensajes de la cola */
-  if (mq_receive(queue, (char*)&msg, sizeof(msg), NULL) == -1) {
-    fprintf(stderr, "Error receiving message\n");
-    return EXIT_FAILURE;
+  while (1) {
+    /* Recibir mensajes de la cola */
+    if (mq_receive(queue, (char*)&msg, sizeof(msg), NULL) == -1) {
+      perror("mq_receive");
+      exit(EXIT_FAILURE);
+    }
+
+    if (msg.is_last == 1) {
+      /* TODO Introducir bloque de fin en memoria compartida para el Monitor */
+      /* ... código del Productor ... */
+      break;
+    }
+
+    /* TODO 3. Comprobar validez, introducir en memoria compartida (Productor) */
+    /* ... código del Productor ... */
+
+    /* Esperar el lag */
+    usleep(lag_comprobador * 1000);
   }
 }
 
