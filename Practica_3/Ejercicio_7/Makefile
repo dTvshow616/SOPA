@@ -19,7 +19,7 @@ $(OBJ_DIR)/pow.o: $(SRC_DIR)/pow.c
 	@echo "Compilando: $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-$(OBJ_DIR)/miner.o: $(SRC_DIR)/miner.c $(INCLUDE_DIR)/pow.h
+$(OBJ_DIR)/miner.o: $(SRC_DIR)/miner.c $(INCLUDE_DIR)/pow.h $(INCLUDE_DIR)/miner_rush.h
 	@echo "Compilando: $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
@@ -29,14 +29,13 @@ clean:
 	@rm -f $(OBJ_DIR)/miner.o $(OBJ_DIR)/pow.o $(EXEC)
 	@rm -f miners.txt target.txt votes.txt winner.txt participants.txt starter.txt round_size.txt tiempos.data *.log
 ifeq ($(UNAME), Darwin)
-	@python3 -c "import ctypes; ctypes.CDLL(None).sem_unlink(b'/miners_mutex')" 2>/dev/null; true
+	@python3 -c "import ctypes; ctypes.CDLL(None).sem_unlink(b'/miners_semaphore')" 2>/dev/null; true
 else
-	@rm -f /dev/shm/sem.miners_mutex
+	@rm -f /dev/shm/sem.miners_semaphore
 endif
 
 run: $(EXEC)
 	./$(EXEC) 10 8000 & ./$(EXEC) 20 8000 & ./$(EXEC) 30 8000
-
 
 toss:
 	@echo "Limpiando logs generados..."

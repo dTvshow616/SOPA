@@ -9,11 +9,10 @@
 #include "miner_rush.h" /* Librería que define variables y librerías globales para todos los procesos */
 #include "pow.h"        /* Librería interna para el POW */
 
-#define TARGET_FILE "target.txt"  /* El archivo que contiene el target a buscar */
-#define VOTES_FILE "votes.txt"    /* El archivo que contiene los votos */
-#define WINNER_FILE "winner.txt"  /* El archivo que contiene el ganador */
-#define MINERS_FILE "miners.txt"  /* Fichero que comparten los mineros para guardar los mineros que están participando */
-#define SEM_MUTEX "/miners_mutex" /* Semáforo para gestionar el acceso al fichero de mineros */
+#define TARGET_FILE "target.txt" /* El archivo que contiene el target a buscar */
+#define VOTES_FILE "votes.txt"   /* El archivo que contiene los votos */
+#define WINNER_FILE "winner.txt" /* El archivo que contiene el ganador */
+#define MINERS_FILE "miners.txt" /* Fichero que comparten los mineros para guardar los mineros que están participando */
 #define PARTICIPANTS_FILE                                                                                              \
   "participants.txt" /* Fichero que comparten los mineros para guardar el número de participantes activos en la ronda \
                         actual*/
@@ -103,12 +102,22 @@ void remove_miner(pid_t pid);
  */
 void handler(int sig);
 
+/**
+ * @brief Accede a la región de memoria compartida llamada SHM_NAME que es de tipo Shared_Memory
+ */
+void access_shared_memory();
+
 /* ---------------------------------------------- Funciones auxiliares ----------------------------------------------- */
 
 /**
  * @brief Funcion para configurar los handlers de las señales SIGALRM, SIGUSR1 y SIGUSR2
  */
 static void setup_signal_handlers(void);
+
+/**
+ * @brief Función para inicializar las máscaras de señales usadas para bloquear y esperar señales en el minero
+ */
+static void init_signal_masks(void);
 
 /**
  * @brief Función para manejar la señal de alarma.
@@ -126,21 +135,16 @@ static void handler_sigusr1(int sig);
 static void handler_sigusr2(int sig);
 
 /**
- * @brief Función para inicializar las máscaras de señales usadas para bloquear y esperar señales en el minero
- */
-static void init_signal_masks(void);
-
-/**
  * @brief Función para abrir el semáforo para manejar el acceso a los ficheros comunes
  * @return el semáforo abierto, o NULL si hubo un error
  */
 static sem_t* open_mutex(void);
 
 /**
- * @brief Función para contar el número de mineros actuales en el sistema
- * @return el número de mineros actuales
+ * @brief Función para limpiar un archivo de texto
+ * @param path la ruta del archivo a limpiar
  */
-static int count_current_miners(void);
+static void clear_text_file(const char* path);
 
 /**
  * @brief Función para escribir el target a buscar en el archivo de targets
@@ -156,10 +160,10 @@ static void write_target_file(int target);
 static int read_target_file(int* target);
 
 /**
- * @brief Función para limpiar un archivo de texto
- * @param path la ruta del archivo a limpiar
+ * @brief Función para contar el número de mineros actuales en el sistema
+ * @return el número de mineros actuales
  */
-static void clear_text_file(const char* path);
+static int count_current_miners(void);
 
 /**
  * @brief Función para mandar la señal indicada a los mineros del sistema
@@ -232,10 +236,12 @@ static void broadcast_signal_to_participants(int sig);
 
 /* ----------------------------------------------- Variables globales ------------------------------------------------ */
 
-int fd_ml[2];                       /* fd[0] para leer, fd[1] para escribir, ml(miner --> logger) */
-int fd_lm[2];                       /* fd[0] para leer, fd[1] para escribir, lm(logger --> miner) */
-int found = 0;                      /* Variable de control para que los hilos sepan si ya se ha encontrado la solución */
-int solution = -1;                  /* Variable para guardar la solución encontrada por los hilos */
+int fd_ml[2]; /* fd[0] para leer, fd[1] para escribir, ml(miner --> logger) */
+int fd_lm[2]; /* fd[0] para leer, fd[1] para escribir, lm(logger --> miner) */
+
+int found = 0;     /* Variable de control para que los hilos sepan si ya se ha encontrado la solución */
+int solution = -1; /* Variable para guardar la solución encontrada por los hilos */
+
 volatile sig_atomic_t stop = 0;     /* Variable de control para que el minero sepa que se tiene que  parar */
 volatile sig_atomic_t got_usr1 = 0; /* Variable de control para que el minero sepa que se ha recibido SIGUSR1 */
 volatile sig_atomic_t got_usr2 = 0; /* Variable de control para que el minero sepa que se ha recibido SIGUSR2 */
@@ -244,6 +250,8 @@ static sigset_t blocked_set;    /* Máscara de señales bloqueadas durante la ej
 static sigset_t wait_usr1_mask; /* Máscara de señales para esperar SIGUSR1 */
 static sigset_t wait_usr2_mask; /* Máscara de señales para esperar SIGUSR2 */
 
+static Shared_Memory* shm = NULL; /* Puntero a la memoria compartida */
+
 /* ----------------------------------------------------- Código ------------------------------------------------------ */
 
 int main(int argc, char* argv[]) {
@@ -251,8 +259,8 @@ int main(int argc, char* argv[]) {
   int n_threads, res, n_secs = 0;
   int is_first = 0;
   pid_t pid;
-  FILE* f = NULL;
 
+  /* Parsear los argumentos de entrada */
   if (argc != 3) {
     return -1;
   }
@@ -264,34 +272,37 @@ int main(int argc, char* argv[]) {
     exit(EXIT_FAILURE);
   }
 
+  /* Crear pipe Miner->Logger */
   if (pipe(fd_ml) == -1) {
     perror("pipe fd_ml");
     exit(EXIT_FAILURE);
   }
 
+  /* Crear pipe Logger->Miner */
   if (pipe(fd_lm) == -1) {
     perror("pipe fd_lm");
     exit(EXIT_FAILURE);
   }
 
+  /* Mitosis de los procesos */
   pid = fork();
-  if (pid < 0) {
+  if (pid < 0) { /* Error */
     perror("fork");
     exit(EXIT_FAILURE);
 
-  } else if (pid == 0) {
-    close(fd_ml[1]);
-    close(fd_lm[0]);
+  } else if (pid == 0) { /* Logger */
+    close(fd_ml[1]);     /* Cerrar la escritura en pipe Miner->Logger */
+    close(fd_lm[0]);     /* Cerrar la lectura en pipe Logger->Miner */
 
     res = childLogger(fd_ml[0], fd_lm[1]);
 
-    close(fd_ml[0]);
-    close(fd_lm[1]);
+    close(fd_ml[0]); /* Cerrar la lectura en pipe Miner->Logger */
+    close(fd_lm[1]); /* Cerrar la escritura en pipe Logger->Miner */
     exit(res);
 
-  } else {
-    close(fd_ml[0]);
-    close(fd_lm[1]);
+  } else {           /* Miner */
+    close(fd_ml[0]); /* Cerrar la lectura en pipe Miner->Logger */
+    close(fd_lm[1]); /* Cerrar la escritura en pipe Logger->Miner */
 
     /* Bloquear la entrada de señales para que no se pierdan */
     init_signal_masks();
@@ -303,6 +314,9 @@ int main(int argc, char* argv[]) {
 
     /* Configurar los manejadores de señales */
     setup_signal_handlers();
+
+    /* Acceder a la memoria compartida */
+    access_shared_memory();
 
     /* Crear un minero y mirar si es el primero o no*/
     is_first = add_miner(getpid());
@@ -328,8 +342,8 @@ int main(int argc, char* argv[]) {
     /* Comenzar a minar */
     res = parentMiner(target, n_secs, n_threads, fd_ml[1], fd_lm[0]);
 
-    close(fd_ml[1]);
-    close(fd_lm[0]);
+    close(fd_ml[1]); /* Cerrar la escritura en pipe Miner->Logger */
+    close(fd_lm[0]); /* Cerrar la lectura en pipe Logger->Miner */
 
     if (res != EXIT_SUCCESS) {
       fprintf(stderr, "Error: parentMiner failed\n");
@@ -344,6 +358,8 @@ int main(int argc, char* argv[]) {
 
   return 0;
 }
+
+/* ----------------------------------------------- Funciones privadas ------------------------------------------------ */
 
 /**
  * @brief Se encarga de guardar en un archivo el resultado de las búsquedas
@@ -768,65 +784,39 @@ static void* minerWorker(void* arg) {
  * @brief Añade un nuevo minero al sistema
  */
 int add_miner(pid_t pid) {
-  sem_t* sem;
-  /*FILE* f;*/
-  int* mapped_miners_file;
   int is_first = 0;
   int count_before = 0;
-  int tmp;
 
-  sem = sem_open(SEM_MUTEX, O_CREAT, 0644, 1);
-  if (sem == SEM_FAILED) {
-    perror("sem_open");
-    exit(EXIT_FAILURE);
-  }
-
-  while (sem_wait(sem) < 0) {
+  /* Esperar para acceder a la información para los mineros */
+  while (sem_wait(shm->miners_semaphore) < 0) {
     if (errno != EINTR) {
       perror("sem_wait");
-      sem_close(sem);
       exit(EXIT_FAILURE);
     }
   }
 
-  /*f = fopen(MINERS_FILE, "a+");
-  if (!f) {
-    perror("fopen");
-    sem_post(sem);
-    exit(EXIT_FAILURE);
-  }
-
-  rewind(f);
-  while (fscanf(f, "%d", &tmp) == 1) {
-    count_before++;
-  }
-
+  /* Contar los mineros apuntados */
+  count_before = shm->n_miners;
   if (count_before == 0) {
     is_first = 1;
   }
 
-  fprintf(f, "%d\n", pid);
-  fclose(f);
+  /* Apuntarse a la ronda */
+  shm->miners[shm->n_miners] = pid;
+  shm->n_miners++;
 
+  /* Prints :3 */
   printf("\x1b[34mMiner %d added to system\x1b[0m\n", pid);
-
-  f = fopen(MINERS_FILE, "r");
-  if (f) {
-    int p;
-    printf("Current miners: ");
-    while (fscanf(f, "%d", &p) == 1) {
-      printf("%d ", p);
-    }
-    printf("\n");
-    fclose(f);
+  printf("Current miners: ");
+  for (int i = 0; i < shm->n_miners; i++) {
+    printf("%d ", shm->miners[i]);
   }
+  printf("\n");
 
-  sem_post(sem);
-  sem_close(sem);*/
+  /* Indicar que ya está libre la información para los mineros */
+  sem_post(shm->miners_semaphore);
 
-  mapped_miners_file = open_and_map_file(MINERS_FILE);
-
-  /* Si antes había uno solo, ya hay 2: arrancar la primera ronda */
+  /* Empezar la ronda si ya había uno, si hay más la ronda ya ha empezado */
   if (count_before == 1) {
     broadcast_signal_to_miners(SIGUSR1);
   }
@@ -838,84 +828,69 @@ int add_miner(pid_t pid) {
  * @brief Elimina un minero del sistema
  */
 void remove_miner(pid_t pid) {
-  sem_t* sem;
-  FILE *f, *temp;
-  int p;
-  int empty = 1;
+  int empty = 0;
 
-  sem = sem_open(SEM_MUTEX, 0);
-  if (sem == SEM_FAILED) {
-    perror("sem_open");
-    exit(EXIT_FAILURE);
-  }
-
-  while (sem_wait(sem) < 0) {
+  while (sem_wait(shm->miners_semaphore) < 0) {
     if (errno != EINTR) {
       perror("sem_wait");
-      sem_close(sem);
       exit(EXIT_FAILURE);
     }
   }
 
-  f = fopen(MINERS_FILE, "r");
-  temp = fopen("temp.txt", "w");
-
-  if (!f || !temp) {
-    perror("fopen");
-    sem_post(sem);
-    exit(EXIT_FAILURE);
-  }
-
-  /* Copiar todos excepto el minero que se elimina */
-  while (fscanf(f, "%d", &p) == 1) {
-    if (p != pid) {
-      fprintf(temp, "%d\n", p);
+  /* Borrar el PID del array compactando */
+  for (int i = 0; i < shm->n_miners; i++) {
+    if (shm->miners[i] == pid) {
+      /* Mover el último elemento a esta posición */
+      shm->miners[i] = shm->miners[shm->n_miners - 1];
+      shm->n_miners--;
+      break;
     }
   }
-
-  fclose(f);
-  fclose(temp);
-
-  rename("temp.txt", MINERS_FILE);
 
   printf("\x1b[35mMiner %d exited system\x1b[0m\n", pid);
 
-  /* Comprobar si el fichero está vacío */
-  f = fopen(MINERS_FILE, "r");
-  if (f) {
-    if (fscanf(f, "%d", &p) == 1) {
-      empty = 0;
+  empty = (shm->n_miners == 0);
+
+  if (!empty) {
+    printf("Current miners: ");
+    for (int i = 0; i < shm->n_miners; i++) {
+      printf("%d ", shm->miners[i]);
     }
-    fclose(f);
+    printf("\n");
   }
+
+  sem_post(shm->miners_semaphore);
 
   if (empty) {
-    printf("No miners left. Cleaning system...\n");
-    remove(MINERS_FILE);
-    remove(TARGET_FILE);
-    remove(VOTES_FILE);
-    remove(WINNER_FILE);
-    remove(PARTICIPANTS_FILE);
-    sem_unlink(SEM_MUTEX);
-
-  } else {
-    f = fopen(MINERS_FILE, "r");
-    if (f) {
-      printf("Current miners: ");
-      while (fscanf(f, "%d", &p) == 1) {
-        printf("%d ", p);
-      }
-      printf("\n");
-      fclose(f);
-    }
+    printf("No miners left.\n");
+    /* TODO: Enviar bloque de finalización a la cola de mensajes aquí */
   }
-
-  sem_post(sem);
-  sem_close(sem);
 }
 
-/* Funciones auxiliares */
+/**
+ * @brief Accede a la región de memoria compartida llamada SHM_NAME que es de tipo Shared_Memory
+ */
+void access_shared_memory() {
+  /* 1. Obtener un descriptor de fichero a la memoria compartida con shm_open */
+  int fd_shm = shm_open(SHM_NAME, O_RDWR, 0);
+  if (fd_shm == -1) {
+    perror("shm_open");
+    exit(EXIT_FAILURE);
+  }
+  /* 2. Enlazar la memoria al espacio de direcciones del proceso con mmap y cerrar el descriptor de fichero con close */
+  shm = mmap(NULL, sizeof(Shared_Memory), PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm, 0);
+  close(fd_shm);
+  if (shm == MAP_FAILED) {
+    perror("mmap");
+    exit(EXIT_FAILURE);
+  }
+}
 
+/* ---------------------------------------------- Funciones auxiliares ----------------------------------------------- */
+
+/**
+ * @brief Funcion para configurar los handlers de las señales SIGALRM, SIGUSR1 y SIGUSR2
+ */
 static void setup_signal_handlers(void) {
   struct sigaction act;
 
@@ -944,6 +919,9 @@ static void setup_signal_handlers(void) {
   }
 }
 
+/**
+ * @brief Función para inicializar las máscaras de señales usadas para bloquear y esperar señales en el minero
+ */
 static void init_signal_masks(void) {
   sigemptyset(&blocked_set);
   sigaddset(&blocked_set, SIGUSR1);
@@ -959,23 +937,35 @@ static void init_signal_masks(void) {
   sigdelset(&wait_usr2_mask, SIGALRM);
 }
 
+/**
+ * @brief Función para manejar la señal de alarma.
+ */
 static void handler_sigalrm(int sig) {
   (void)sig;
   stop = 1;
 }
 
+/**
+ * @brief Función para manejar la señal de inicio de ronda.
+ */
 static void handler_sigusr1(int sig) {
   (void)sig;
   got_usr1 = 1;
 }
 
+/**
+ * @brief Función para manejar la señal de inicio de votación.
+ */
 static void handler_sigusr2(int sig) {
   (void)sig;
   got_usr2 = 1;
 }
 
+/**
+ * @brief Función para abrir el semáforo para manejar el acceso a los ficheros comunes
+ */
 static sem_t* open_mutex(void) {
-  sem_t* sem = sem_open(SEM_MUTEX, 0);
+  sem_t* sem = shm->miners_semaphore;
   if (sem == SEM_FAILED) {
     perror("sem_open");
     exit(EXIT_FAILURE);
@@ -983,6 +973,9 @@ static sem_t* open_mutex(void) {
   return sem;
 }
 
+/**
+ * @brief Función para limpiar un archivo de texto
+ */
 static void clear_text_file(const char* path) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
@@ -1008,6 +1001,9 @@ static void clear_text_file(const char* path) {
   sem_close(sem);
 }
 
+/**
+ * @brief Función para escribir el target a buscar en el archivo de targets
+ */
 static void write_target_file(int target) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
@@ -1035,6 +1031,9 @@ static void write_target_file(int target) {
   sem_close(sem);
 }
 
+/**
+ * @brief Función para leer el target a buscar del archivo de targets
+ */
 static int read_target_file(int* target) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
@@ -1061,6 +1060,9 @@ static int read_target_file(int* target) {
   return ok;
 }
 
+/**
+ * @brief Función para contar el número de mineros actuales en el sistema
+ */
 static int count_current_miners(void) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
@@ -1087,6 +1089,9 @@ static int count_current_miners(void) {
   return count;
 }
 
+/**
+ * @brief Función para mandar la señal indicada a los mineros del sistema
+ */
 static void broadcast_signal_to_miners(int sig) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
@@ -1114,6 +1119,9 @@ static void broadcast_signal_to_miners(int sig) {
   sem_close(sem);
 }
 
+/**
+ * @brief Función para declararse winner de la ronda
+ */
 static int claim_winner(pid_t pid, int solution) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
@@ -1153,8 +1161,14 @@ static int claim_winner(pid_t pid, int solution) {
   return !already_claimed;
 }
 
+/**
+ * @brief Función para limpiar el archivo de ganador
+ */
 static void clear_winner_file(void) { clear_text_file(WINNER_FILE); }
 
+/**
+ * @brief Funcion para añadir un voto al archivo de votos
+ */
 static void append_vote(pid_t pid, char vote) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
@@ -1182,6 +1196,9 @@ static void append_vote(pid_t pid, char vote) {
   sem_close(sem);
 }
 
+/**
+ * @brief Función para contar los votos en un archivo
+ */
 static void count_votes(int* yes, int* no, char* votes_str, size_t votes_str_size) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
@@ -1228,20 +1245,32 @@ static void count_votes(int* yes, int* no, char* votes_str, size_t votes_str_siz
   sem_close(sem);
 }
 
+/**
+ * @brief Función para esperar la señal SIGUSR1
+ */
 static void wait_for_usr1(void) {
   while (!got_usr1 && !stop) {
     sigsuspend(&wait_usr1_mask);
   }
 }
 
+/**
+ * @brief Función para esperar la señal SIGUSR2
+ */
 static void wait_for_usr2(void) {
   while (!got_usr2 && !stop) {
     sigsuspend(&wait_usr2_mask);
   }
 }
 
+/**
+ * @brief Función para limpiar el archivo de participantes activos en la ronda actual
+ */
 static void clear_participants_file(void) { clear_text_file(PARTICIPANTS_FILE); }
 
+/**
+ * @brief Funcion para añadir un proceso al archivo de participantes de la ronda
+ */
 static void append_participant(pid_t pid) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
@@ -1269,6 +1298,9 @@ static void append_participant(pid_t pid) {
   sem_close(sem);
 }
 
+/**
+ * @brief Función para contar el número de participantes activos en la ronda actual
+ */
 static int count_participants(void) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;
@@ -1295,6 +1327,9 @@ static int count_participants(void) {
   return count;
 }
 
+/**
+ * @brief Función para mandar una señal a todos los participantes de la ronda actual
+ */
 static void broadcast_signal_to_participants(int sig) {
   sem_t* sem = open_mutex();
   FILE* f = NULL;

@@ -29,9 +29,9 @@ clean:
 	@rm -f $(OBJ_DIR)/miner.o $(OBJ_DIR)/pow.o $(EXEC)
 	@rm -f miners.txt target.txt votes.txt winner.txt participants.txt starter.txt round_size.txt tiempos.data *.log
 ifeq ($(UNAME), Darwin)
-	@python3 -c "import ctypes; ctypes.CDLL(None).sem_unlink(b'/miners_mutex')" 2>/dev/null; true
+	@python3 -c "import ctypes; ctypes.CDLL(None).sem_unlink(b'/miners_semaphore')" 2>/dev/null; true
 else
-	@rm -f /dev/shm/sem.miners_mutex
+	@rm -f /dev/shm/sem.miners_semaphore
 endif
 
 run: $(EXEC)

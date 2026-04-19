@@ -38,7 +38,7 @@ typedef struct {
  */
 typedef struct {
   /* Datos del antiguo miners.txt */
-  sem_t* miners_mutex;      /* Semáforo para los mineros */
+  sem_t* miners_semaphore;  /* Semáforo para los mineros */
   pid_t miners[MAX_MINERS]; /* Lista de mineros activos (sus pids) */
   int n_miners;             /* Número de mineros actual */
 
