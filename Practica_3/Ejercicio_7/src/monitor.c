@@ -23,7 +23,7 @@ int main(int argc, char* argv[]) {
     return -1;
   }
 
-  comprobador();
+  comprobador(); /* Padre */
 
   return 0;
 }
@@ -78,7 +78,10 @@ void monitor() {
     printf("Shared memory segment created\n");
   }
 
-  sem = sem_open(SEM_NAME, O_CREAT | O_EXCL, 0644, 1);
+  Shared_Memory* shm = (Shared_Memory*)malloc(1 * sizeof(Shared_Memory)); /* Esto luego se mapea en miner */
+  // sem_init(&shm->miners_mutex, 1, 1);                                     /* __pshared = 1 para que se comparta entre procesos */
+  shm->n_miners = 0;
+  shm->miners_mutex = sem_open(SEM_NAME, O_CREAT | O_EXCL, 0644, 1);
   if (sem == SEM_FAILED) {
     perror("sem_open");
     close(fd_shm);

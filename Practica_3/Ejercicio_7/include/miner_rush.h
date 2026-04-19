@@ -21,6 +21,28 @@
 #define SEM_NAME "/semaphore"     /* Semáforo para gestionar el acceso al fichero de mineros */
 #define MQ_NAME "/message_queue"  /* Cola de mensajes entre procesos */
 
+#define MAX_MINERS 100   /* Número máximo de mineros que puede haber */
 #define MAX_VOTE_WAIT 50 /* Tiempo máximo a esperar por los votos de los mineros (en segundos) */
+
+/**
+ * @brief Mensaje que viaja de Minero a Comprobador por la cola de mensajes
+ */
+typedef struct {
+  long target;   /* El target a buscar por el minero */
+  long solution; /* La solución encontrada por el minero */
+  int is_last;   /* 1 si el minero era el último, 0 si no */
+} Minero_Comprobador;
+
+/**
+ * @brief Estructura de la memoria compartida, toda la info de los ficheros ahora va aquí
+ */
+typedef struct {
+  /* Datos del antiguo miners.txt */
+  sem_t* miners_mutex;      /* Semáforo para los mineros */
+  pid_t miners[MAX_MINERS]; /* Lista de mineros activos (sus pids) */
+  int n_miners;             /* Número de mineros actual */
+
+  /* Aquí van el resto de cosas, voy una por una */
+} Shared_Memory;
 
 #endif

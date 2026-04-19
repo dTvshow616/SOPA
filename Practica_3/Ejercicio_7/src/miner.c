@@ -230,14 +230,6 @@ static int count_participants(void);
  */
 static void broadcast_signal_to_participants(int sig);
 
-/**
- * @brief Abre un fichero y lo mapea
- *
- * @param filename el nombre del fichero
- * @return int* un puntero a la zona de memoria mapeada
- */
-static int* open_and_map_file(char* filename);
-
 /* ----------------------------------------------- Variables globales ------------------------------------------------ */
 
 int fd_ml[2];                       /* fd[0] para leer, fd[1] para escribir, ml(miner --> logger) */
@@ -777,7 +769,8 @@ static void* minerWorker(void* arg) {
  */
 int add_miner(pid_t pid) {
   sem_t* sem;
-  FILE* f;
+  /*FILE* f;*/
+  int* mapped_miners_file;
   int is_first = 0;
   int count_before = 0;
   int tmp;
@@ -796,7 +789,7 @@ int add_miner(pid_t pid) {
     }
   }
 
-  f = fopen(MINERS_FILE, "a+");
+  /*f = fopen(MINERS_FILE, "a+");
   if (!f) {
     perror("fopen");
     sem_post(sem);
@@ -829,7 +822,9 @@ int add_miner(pid_t pid) {
   }
 
   sem_post(sem);
-  sem_close(sem);
+  sem_close(sem);*/
+
+  mapped_miners_file = open_and_map_file(MINERS_FILE);
 
   /* Si antes había uno solo, ya hay 2: arrancar la primera ronda */
   if (count_before == 1) {
@@ -1325,48 +1320,4 @@ static void broadcast_signal_to_participants(int sig) {
 
   sem_post(sem);
   sem_close(sem);
-}
-
-static int* open_and_map_file(char* filename) {
-  /* int created = 0; */
-  int fd;
-  int* mapped = NULL;
-
-  if ((fd = open(filename, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)) == -1) {
-    if (errno == EEXIST) {
-      if ((fd = open(filename, O_RDWR, 0)) == -1) {
-        perror("open");
-        exit(EXIT_FAILURE);
-      }
-    } else {
-      perror("open");
-      exit(EXIT_FAILURE);
-    }
-  } else {
-    if (ftruncate(fd, sizeof(int)) == -1) {
-      perror("ftruncate");
-      close(fd);
-      exit(EXIT_FAILURE);
-    }
-    /* created = 1; */
-  }
-
-  if ((mapped = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)) == MAP_FAILED) {
-    perror("mmap");
-    close(fd);
-    exit(EXIT_FAILURE);
-  }
-
-  return mapped;
-
-  /*close(fd);
-
-  if (created) {
-    *mapped = 0;
-  }
-  *mapped += 1;
-  printf("Counter: %d\n", *mapped);
-  munmap(mapped, sizeof(int));
-
-  exit(EXIT_SUCCESS);*/
 }
