@@ -4,6 +4,7 @@
 /* La descripcion de las librerias a continuacion se ha sacado del man siempre que se podia */
 #include <errno.h>      /* Errno, EINTR */
 #include <fcntl.h>      /* Manipulate file descriptor */
+#include <mqueue.h>     /* POSIX API for message queues */
 #include <pthread.h>    /* POSIX threads */
 #include <semaphore.h>  /* Semaphores to manage the different processes*/
 #include <signal.h>     /* Signal handling */
@@ -23,15 +24,6 @@
 
 #define MAX_MINERS 100   /* Número máximo de mineros que puede haber */
 #define MAX_VOTE_WAIT 50 /* Tiempo máximo a esperar por los votos de los mineros (en segundos) */
-
-/**
- * @brief Mensaje que viaja de Minero a Comprobador por la cola de mensajes
- */
-typedef struct {
-  long target;   /* El target a buscar por el minero */
-  long solution; /* La solución encontrada por el minero */
-  int is_last;   /* 1 si el minero era el último, 0 si no */
-} Minero_Comprobador;
 
 /**
  * @brief Estructura de la memoria compartida, toda la info de los ficheros ahora va aquí
@@ -59,5 +51,19 @@ typedef struct {
 
   /* Aquí van el resto de cosas, voy una por una */
 } Shared_Memory;
+
+/**
+ * @brief Mensaje que viaja de Minero a Comprobador por la cola de mensajes
+ */
+typedef struct {
+  long target;   /* El target a buscar por el minero */
+  long solution; /* La solución encontrada por el minero */
+  int is_last;   /* 1 si el minero era el último, 0 si no */
+} Minero_Comprobador;
+
+/**
+ * @brief Atributos de la cola de mensajes entre Minero y Comprobador, 10 es el máximo número de mensajes que acepta Linux
+ */
+struct mq_attr attributes = {.mq_flags = 0, .mq_maxmsg = 10, .mq_curmsgs = 0, .mq_msgsize = sizeof(Minero_Comprobador)};
 
 #endif

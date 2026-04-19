@@ -107,7 +107,7 @@ void remove_shared_memory();
 /**
  * @brief Lleva acabo el sem_wait con control de errores
  */
-void teeny_sem_wait(sem_t* sem);
+void controlled_sem_wait(sem_t* sem);
 
 /* ---------------------------------------------- Funciones auxiliares ----------------------------------------------- */
 
@@ -226,6 +226,7 @@ int main(int argc, char* argv[]) {
   int n_threads, res, n_secs = 0;
   int is_first = 0;
   pid_t pid;
+  sem_t* sem;
 
   /* Parsear los argumentos de entrada */
   if (argc != 3) {
@@ -294,10 +295,13 @@ int main(int argc, char* argv[]) {
       }
 
       if (!stop) {
-        register_target(0);
-        // TODO clear_shared_memory?
-        // TODO: sustituir: clear_text_file(VOTES_FILE);
-        // TODO: sustituir: clear_participants_file();
+        /* Registro del target y reseteo */
+        sem = open_mutex();
+        controlled_sem_wait(sem);
+        shm->target = target;
+        shm->n_votes = 0;
+        shm->n_participants = 0;
+        sem_close(sem);
 
         printf("Initial target created: 0\n");
 
@@ -343,7 +347,7 @@ int childLogger(int read_fd, int write_fd) {
   ssize_t n = 0;
 
   /* Guardar nombre del fichero a crear en filename */
-  snprintf(filename, sizeof(filename), "%jd.log", (intmax_t)ppid);  // TODO: Esto debería dejar de usarse
+  snprintf(filename, sizeof(filename), "%jd.log", (intmax_t)ppid);
 
   /* Abrir el fichero para escribir, crear si no existe, vaciarlo si existe */
   out = open(filename, O_CREAT | O_TRUNC | O_WRONLY, 0644);
@@ -439,6 +443,8 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
   char votes_str[256];
   ssize_t n = 0;
   msg_t m;
+  sem_t* sem;
+  int w, i = 0;
 
   alarm(n_secs);
 
@@ -468,7 +474,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     append_participant(getpid());
 
     /* Dar un pequeño margen para que todos los mineros de esta ronda se apunten */
-    for (int w = 0; w < 5 && !stop; w++) {
+    for (w = 0; w < 5 && !stop; w++) {
       usleep(100000);
     }
 
@@ -505,7 +511,12 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       int expected;
 
       register_target(sol);
-      // TODO: sustituir: clear_text_file(VOTES_FILE);
+
+      /* Reseteo */
+      sem = open_mutex();
+      controlled_sem_wait(sem);
+      shm->n_votes = 0;
+      sem_close(sem);
 
       broadcast_signal_to_participants(SIGUSR2);
 
@@ -513,8 +524,13 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
 
       expected = expected_participants;
       if (expected < 2 || shm->n_miners < 2) {
-        // TODO: sustituir: clear_participants_file();
-        // TODO: sustituir: clear_winner_file();
+        /* Reseteo */
+        sem = open_mutex();
+        controlled_sem_wait(sem);
+        shm->n_participants = 0;
+        shm->winner = -1;
+        shm->winner_solution = -1;
+        sem_close(sem);
 
         /* Si hay suficientes mineros para una nueva ronda se manda la señal para comenzar*/
         if (shm->n_miners >= 2) {
@@ -528,7 +544,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       }
 
       /* Contar votos*/
-      for (int i = 0; i < MAX_VOTE_WAIT; ++i) {
+      for (i = 0; i < MAX_VOTE_WAIT; ++i) {
         votes_str[0] = '\0';
         count_votes(&yes, &no, votes_str, sizeof(votes_str));
         if ((yes + no) >= expected) {
@@ -542,8 +558,13 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       /* Si ya solo queda uno, o no han llegado todos los votos esperados,
          esta ronda no se acepta ni se imprime */
       if (shm->n_miners < 2 || (yes + no) < expected) {
-        // TODO: sustituir: clear_participants_file();
-        // TODO: sustituir: clear_winner_file();
+        /* Reseteo */
+        sem = open_mutex();
+        controlled_sem_wait(sem);
+        shm->n_participants = 0;
+        shm->winner = -1;
+        shm->winner_solution = -1;
+        sem_close(sem);
 
         if (shm->n_miners >= 2) {
           broadcast_signal_to_miners(SIGUSR1);
@@ -595,9 +616,13 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
         return EXIT_FAILURE;
       }
 
-      /* Resetear ficheros y variables para siguiente ronda */
-      // TODO: sustituir: clear_participants_file();
-      // TODO: sustituir: clear_winner_file();
+      /* Reseteo */
+      sem = open_mutex();
+      controlled_sem_wait(sem);
+      shm->n_participants = 0;
+      shm->winner = -1;
+      shm->winner_solution = -1;
+      sem_close(sem);
 
       current_target = sol;
       target = sol;
@@ -619,10 +644,10 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     }
     got_usr2 = 0;
 
-    proposed = shm->target;  // TODO: Revisar
+    proposed = shm->target;  // REVIEW
     /*proposed = current_target;
     int proposed_read = 0;
-    for (int retry = 0; retry < 5; retry++) {
+    for( retry = 0; retry < 5; retry++) {
       if (read_target_file(&proposed)) {
         proposed_read = 1;
         break;
@@ -756,6 +781,7 @@ int add_miner(pid_t pid) {
   int is_first = 0;
   int count_before = 0;
   sem_t* sem = open_mutex();
+  int i = 0;
 
   /* Esperar para acceder a la información para los mineros */
   while (sem_wait(sem) < 0) {
@@ -779,7 +805,7 @@ int add_miner(pid_t pid) {
   /* Prints :3 */
   printf("\x1b[34mMiner %d added to system\x1b[0m\n", pid);
   printf("Current miners: ");
-  for (int i = 0; i < shm->n_miners; i++) {
+  for (i = 0; i < shm->n_miners; i++) {
     printf("%d ", shm->miners[i]);
   }
   printf("\n");
@@ -800,13 +826,16 @@ int add_miner(pid_t pid) {
  */
 void remove_miner(pid_t pid) {
   int no_miners_left = 0;
+  sem_t* sem = open_mutex();
+  int i = 0;
+  mqd_t queue;
+  Minero_Comprobador msg;
 
   /* Esperar para acceder a la información para los mineros */
-  sem_t* sem = open_mutex();
-  teeny_sem_wait(sem);
+  controlled_sem_wait(sem);
 
   /* Desapuntarse de la ronda */
-  for (int i = 0; i < shm->n_miners; i++) {
+  for (i = 0; i < shm->n_miners; i++) {
     if (shm->miners[i] == pid) {
       /* Mover el último elemento a esta posición */
       shm->miners[i] = shm->miners[shm->n_miners - 1];
@@ -826,7 +855,7 @@ void remove_miner(pid_t pid) {
   /* Prints :3 */
   if (!no_miners_left) {
     printf("Current miners: ");
-    for (int i = 0; i < shm->n_miners; i++) {
+    for (i = 0; i < shm->n_miners; i++) {
       printf("%d ", shm->miners[i]);
     }
     printf("\n");
@@ -838,7 +867,24 @@ void remove_miner(pid_t pid) {
   /* Terminar el programa si no quedan mineros */
   if (no_miners_left) {
     printf("No miners left :/\n");
-    /* TODO: Enviar bloque de finalización a la cola de mensajes */
+
+    /* Enviar mensaje con finalización a la cola de mensajes */
+    queue = mq_open(MQ_NAME, O_WRONLY, S_IRUSR | S_IWUSR, &attributes);
+    if (queue == (mqd_t)-1) {
+      perror("mq_open");
+      exit(EXIT_FAILURE);
+    }
+
+    msg.target = shm->target;
+    msg.solution = solution;
+    msg.is_last = 1;
+
+    if (mq_send(queue, (char*)&msg, sizeof(msg), 1) == -1) {
+      perror("mq_send");
+      exit(EXIT_FAILURE);
+    }
+
+    mq_close(queue);
   }
 }
 
@@ -966,7 +1012,7 @@ static sem_t* open_mutex(void) {
 static void register_target(int target) {
   sem_t* sem = open_mutex();
 
-  teeny_sem_wait(sem);
+  controlled_sem_wait(sem);
 
   shm->target = target;
 
@@ -979,10 +1025,11 @@ static void register_target(int target) {
  */
 static void broadcast_signal_to_miners(int sig) {
   sem_t* sem = open_mutex();
+  int i = 0;
 
-  teeny_sem_wait(sem);
+  controlled_sem_wait(sem);
 
-  for (int i = 0; i < shm->n_miners; i++) {
+  for (i = 0; i < shm->n_miners; i++) {
     if (shm->miners[i] != getpid()) {
       kill(shm->miners[i], sig);
     }
@@ -998,13 +1045,33 @@ static void broadcast_signal_to_miners(int sig) {
 static int claim_winner(pid_t pid, int solution) {
   sem_t* sem = open_mutex();
   int already_claimed = 0;
+  mqd_t queue;
+  Minero_Comprobador msg;
 
-  teeny_sem_wait(sem);
+  controlled_sem_wait(sem);
 
   /* Si no hay ganador, este proceso se delcara ganador */
-  if (!shm->winner || !shm->winner_solution) {
+  if (shm->winner == -1 || shm->winner_solution == -1) {
     shm->winner = pid;
     shm->winner_solution = solution;
+
+    /* Enviar mensaje por la cola */
+    queue = mq_open(MQ_NAME, O_WRONLY, S_IRUSR | S_IWUSR, &attributes);
+    if (queue == (mqd_t)-1) {
+      perror("mq_open");
+      exit(EXIT_FAILURE);
+    }
+
+    msg.target = shm->target;
+    msg.solution = solution;
+    msg.is_last = 0;
+
+    if (mq_send(queue, (char*)&msg, sizeof(msg), 1) == -1) {
+      perror("mq_send");
+      exit(EXIT_FAILURE);
+    }
+
+    mq_close(queue);
   } else {
     already_claimed = 1;
   }
@@ -1020,7 +1087,7 @@ static int claim_winner(pid_t pid, int solution) {
 static void append_vote(pid_t pid, char vote) {
   sem_t* sem = open_mutex();
 
-  teeny_sem_wait(sem);
+  controlled_sem_wait(sem);
 
   shm->voter[shm->n_votes] = pid;
   shm->voter_vote[shm->n_votes] = vote;
@@ -1037,6 +1104,7 @@ static void count_votes(int* yes, int* no, char* votes_str, size_t votes_str_siz
   sem_t* sem = open_mutex();
   char vote;
   size_t used = 0;
+  int i = 0;
 
   *yes = 0;
   *no = 0;
@@ -1045,9 +1113,9 @@ static void count_votes(int* yes, int* no, char* votes_str, size_t votes_str_siz
     votes_str[0] = '\0';
   }
 
-  teeny_sem_wait(sem);
+  controlled_sem_wait(sem);
 
-  for (int i = 0; i < shm->n_votes; i++) {
+  for (i = 0; i < shm->n_votes; i++) {
     vote = shm->voter_vote[i];
     if (vote == 'Y') {
       (*yes)++;
@@ -1092,7 +1160,7 @@ static void wait_for_usr2(void) {
 static void append_participant(pid_t pid) {
   sem_t* sem = open_mutex();
 
-  teeny_sem_wait(sem);
+  controlled_sem_wait(sem);
 
   shm->participants[shm->n_participants] = pid;
   shm->n_participants++;
@@ -1106,10 +1174,11 @@ static void append_participant(pid_t pid) {
  */
 static void broadcast_signal_to_participants(int sig) {
   sem_t* sem = open_mutex();
+  int i = 0;
 
-  teeny_sem_wait(sem);
+  controlled_sem_wait(sem);
 
-  for (int i = 0; i < shm->n_participants; i++) {
+  for (i = 0; i < shm->n_participants; i++) {
     if (shm->participants[i] != getpid()) {
       kill(shm->participants[i], sig);
     }
@@ -1122,7 +1191,7 @@ static void broadcast_signal_to_participants(int sig) {
 /**
  * @brief Lleva acabo el sem_wait con control de errores
  */
-void teeny_sem_wait(sem_t* sem) {
+void controlled_sem_wait(sem_t* sem) {
   while (sem_wait(sem) < 0) {
     if (errno != EINTR) {
       perror("sem_wait");
