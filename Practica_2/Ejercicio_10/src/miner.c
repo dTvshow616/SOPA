@@ -21,12 +21,12 @@
 
 #include "pow.h" /* Librería interna para el POW */
 
-#define TARGET_FILE "target.txt"  /* El archivo que contiene el target a buscar */
-#define VOTES_FILE "votes.txt"    /* El archivo que contiene los votos */
-#define WINNER_FILE "winner.txt"  /* El archivo que contiene el ganador */
-#define MAX_VOTE_WAIT 50          /* Tiempo máximo a esperar por los votos de los mineros (en segundos) */
-#define MINERS_FILE "miners.txt"  /* Fichero que comparten los mineros para guardar los mineros que están participando */
-#define SEM_MUTEX "/miners_mutex" /* Semáforo para gestionar el acceso al fichero de mineros */
+#define TARGET_FILE "target.txt"      /* El archivo que contiene el target a buscar */
+#define VOTES_FILE "votes.txt"        /* El archivo que contiene los votos */
+#define WINNER_FILE "winner.txt"      /* El archivo que contiene el ganador */
+#define MAX_VOTE_WAIT 50              /* Tiempo máximo a esperar por los votos de los mineros (en segundos) */
+#define MINERS_FILE "miners.txt"      /* Fichero que comparten los mineros para guardar los mineros que están participando */
+#define SEM_MUTEX "/miners_semaphore" /* Semáforo para gestionar el acceso al fichero de mineros */
 #define PARTICIPANTS_FILE                                                                                              \
   "participants.txt" /* Fichero que comparten los mineros para guardar el número de participantes activos en la ronda \
                         actual*/
@@ -680,8 +680,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     }
 
     if (!proposed_read) {
-      fprintf(stderr, "Warning: failed to read proposed solution from %s, using current target %d for vote\n", TARGET_FILE,
-              current_target);
+      fprintf(stderr, "Warning: failed to read proposed solution from %s, using current target %d for vote\n", TARGET_FILE, current_target);
     }
 
     append_vote(getpid(), (pow_hash(proposed) == current_target) ? 'Y' : 'N');

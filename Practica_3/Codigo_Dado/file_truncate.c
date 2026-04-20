@@ -7,7 +7,7 @@
 #define SHM_NAME "/shm_example"
 #define MESSAGE "Test message"
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   int fd;
   struct stat statbuf;
 

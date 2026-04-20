@@ -2,32 +2,46 @@
  * @file monitor.c
  * @author Carlos Mendez & Ana Olsson
  * @brief Miner Rush program
- * @version 1.0
- * @date 2026-02-25
+ * @version 2.1
+ * @date 2026-04-20
  */
 
-/* La descripcion de las librerias a continuacion se ha sacado del man siempre que se podia */
-#include <errno.h>      /* errno, EINTR */
-#include <fcntl.h>      /* manipulate file descriptor */
-#include <pthread.h>    /* POSIX threads */
-#include <semaphore.h>  /* Semaphores to manage the different processes*/
-#include <signal.h>     /* Signal handling */
-#include <stdint.h>     /* exact-width integer types */
-#include <stdio.h>      /* standard input/output library functions */
-#include <stdlib.h>     /* numeric conversion functions, pseudo-random numbers generation functions, memory allocation, process control functions */
-#include <sys/mman.h>   // TODO documentar
-#include <sys/stat.h>   // TODO documentar
-#include <sys/types.h>  // TODO documentar
-#include <sys/wait.h>   /* wait for process to change state */
-#include <time.h>       /* Tiempitos */
-#include <unistd.h>     /* POSIX operating system API */
+#include "miner_rush.h" /* Librería que define variables y librerías globales para todos los procesos */
 
-#define SHM_NAME "dos_puntos_tres"
-#define SEM_NAME "/miners_mutex" /* Semáforo para gestionar el acceso al fichero de mineros */
+/* --------------------------------------------------- Estructuras --------------------------------------------------- */
+
+/**
+ * @brief Atributos de la cola de mensajes entre Minero y Comprobador
+ */
+struct mq_attr attributes = {.mq_flags = 0, .mq_maxmsg = 7, .mq_curmsgs = 0, .mq_msgsize = sizeof(Minero_Comprobador)};
+
+/* ----------------------------------------------- Funciones privadas ------------------------------------------------ */
+
+/**
+ * @brief Se encarga de mostrar la salida unificada, hijo de Comprobador. Arranca en primer lugar y finaliza el último
+ */
+void monitor(int lag_monitor);
+
+/**
+ * @brief Se encarga de recibir los bloques por cola de mensajes y validarlos, padre de Monitor
+ */
+void comprobador(int lag_comprobador);
+
+/**
+ * @brief It initializes the shared memory's info
+ *
+ * @param shm a pointer to the shared memory
+ */
+void init_shm(Shared_Memory* shm);
+
+/* ----------------------------------------------- Variables globales ------------------------------------------------ */
+
+volatile sig_atomic_t stop = 0; /* Variable de control para que el minero sepa que se tiene que parar */
+
+/* ----------------------------------------------------- Código ------------------------------------------------------ */
 
 int main(int argc, char* argv[]) {
-  /* Retraso en milisegundoes de cada cosa */
-  int lag_comprobador, lag_monitor;
+  int lag_comprobador, lag_monitor; /* Retraso en milisegundos de cada cosa */
 
   if (argc != 3) {
     return -1;
@@ -40,37 +54,42 @@ int main(int argc, char* argv[]) {
     return -1;
   }
 
-  comprobador();
+  printf("---------------------------------------- Welcome to Miner Rush! :] ----------------------------------------\n");
 
-  return 0;
-}
-
-/**
- * @brief Se encarga de recibir los bloques por cola de mensajes y validarlos, padre de Monitor
- *
- */
-void comprobador() {
+  /* Mitosis */
   int pid = fork();
   if (pid < 0) {
     perror("fork");
     exit(EXIT_FAILURE);
-  } else if (pid == 0) {
-    monitor();
-  } else {
-    /* Debe crear la cola de mensajes por donde le llegarán las soluciones a validar */
-    // TODO Código
+
+  } else if (pid == 0) { /* Monitor */
+    monitor(lag_monitor);
+
+  } else { /* Comprobador */
+    comprobador(lag_comprobador);
+
+    /* Ser buen padre */
+    wait(NULL);
   }
+
+  printf("--------------------------------------- The Miner Rush has ended :7 ---------------------------------------\n");
+  printf("                                         (I'm not stuck, hit Enter)\n");
+
+  return 0;
 }
 
+/* ----------------------------------------------- Funciones privadas ------------------------------------------------ */
+
 /**
- * @brief Se encarga de mostrar la salida unificada, hijo de Comprobador
- *
+ * @brief Se encarga de mostrar la salida unificada, hijo de Comprobador. Arranca en primer lugar y finaliza el último
  */
-void monitor() {
-  int fd_shm; /* Descriptor del fichero */
-  sem_t* sem; /* Semáforo con nombre */
-  /* Arranca en primer lugar y finaliza el último */
-  /* Debe crear los segmentos de memoria compartida y los semáforos que compartirán los procesos del sistema */
+void monitor(int lag_monitor) {
+  int fd_shm;           /* Descriptor de fichero de la memoria compartida*/
+  Shared_Memory* shm;   /* Puntero a la memoria compartida*/
+  sem_t* sem_miners;    /* Puntero al semáforo de los mineros */
+  Bloque_Buffer bloque; /* Bloque del Productor-Consumidor */
+
+  /* Crear los segmentos de memoria compartida que compartirán los procesos del sistema */
   fd_shm = shm_open(SHM_NAME, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
   if (fd_shm == -1) {
     if (errno == EEXIST) {
@@ -86,19 +105,187 @@ void monitor() {
       exit(EXIT_FAILURE);
     }
   } else {
+    if (ftruncate(fd_shm, sizeof(Shared_Memory)) == -1) {
+      perror("ftruncate");
+      close(fd_shm);
+      exit(EXIT_FAILURE);
+    }
     printf("Shared memory segment created\n");
   }
 
-  sem = sem_open(SEM_NAME, O_CREAT | O_EXCL, 0644, 1);
-  if (sem == SEM_FAILED) {
-    perror("sem_open");
-    close(fd_shm);
+  shm = mmap(NULL, sizeof(Shared_Memory), PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm, 0);
+  close(fd_shm);
+
+  init_shm(shm);
+
+  /* Crear los semáforos que compartirán los procesos del sistema */
+  if ((sem_miners = (sem_open(SEM_NAME, O_CREAT | O_EXCL, S_IRUSR | S_IWUSR, 1))) == SEM_FAILED) {
+    sem_miners = sem_open(SEM_NAME, 0);
+  }
+
+  /* Semáforos del Productor-Consumidor */
+  sem_init(&shm->sem_empty, 1, 6); /* 6 huecos vacíos */
+  sem_init(&shm->sem_fill, 1, 0);  /* 0 huecos llenos */
+  sem_init(&shm->sem_mutex, 1, 1); /* Mutex a 1 */
+
+  printf("[%d] Printing blocks...\n", getpid());
+  while (1) {
+    /* Recibir información de Monitor a través de Productor-Consumidor */
+    sem_wait(&shm->sem_fill);  /* Down(sem_fill); */
+    sem_wait(&shm->sem_mutex); /* Down(sem_mutex); */
+    /* ExtraerElemento(); */
+    bloque = shm->buffer[shm->out]; /* Extraer último elemento */
+    shm->out = (shm->out + 1) % 6;  /* Actualizar índice último elemento en buffer circular */
+    sem_post(&shm->sem_mutex);      /* Up(sem_mutex); */
+    sem_post(&shm->sem_empty);      /* Up(sem_empty); */
+
+    /* Terminar si el programa ha terminado */
+    if (bloque.is_last) {
+      break;
+    }
+
+    /* Prints :3 */
+    if (bloque.is_valid == 1) {
+      printf("Solution \x1b[32maccepted\x1b[0m: %08ld --> %08ld\n", bloque.target, bloque.solution);
+    } else {
+      printf("Solution \x1b[31mrejected\x1b[0m: %08ld !-> %08ld\n", bloque.target, bloque.solution);
+    }
+
+    /* Esperar el lag */
+    usleep(lag_monitor * 1000);
+  }
+
+  printf("\x1b[35m[%d] Finishing (Monitor)\x1b[0m\n", getpid());
+
+  /* Si este proceso se para, el sistema detendrá la ejecución del Comprobador */
+  stop = 1;
+
+  /* Destruir los semáforos del Productor-Consumidor */
+  sem_destroy(&shm->sem_empty);
+  sem_destroy(&shm->sem_fill);
+  sem_destroy(&shm->sem_mutex);
+
+  /* Liberar la memoria compartida */
+  munmap(shm, sizeof(Shared_Memory));
+  shm_unlink(SHM_NAME);
+
+  /* Cerrar y borrar el semáforo de los mineros */
+  sem_close(sem_miners);
+  sem_unlink(SEM_NAME);
+
+  exit(EXIT_SUCCESS);
+}
+
+/**
+ * @brief Se encarga de recibir los bloques por cola de mensajes y validarlos, padre de Monitor
+ */
+void comprobador(int lag_comprobador) {
+  Minero_Comprobador msg;      /* El mensaje de la cola de mensajes */
+  Shared_Memory* shm;          /* Puntero a la memoria compartida*/
+  mqd_t queue;                 /* La cola de mensajes */
+  int i, fd_shm, found_wallet; /* Variable de bucle, descriptor del fichero de memoria compartida y si se ha encontrado la cartera */
+  Bloque_Buffer bloque;        /* Bloque que será añadido al buffer del modelo Productor-Consumidor */
+
+  /* Dar mini retardo para que se cree la memoria compartida */
+  usleep(100000);
+
+  /* Acceder a la memoria compartida creada por Monitor */
+  fd_shm = shm_open(SHM_NAME, O_RDWR, 0);
+  shm = mmap(NULL, sizeof(Shared_Memory), PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm, 0);
+  close(fd_shm);
+
+  /* Crear la cola de mensajes por donde le llegarán las soluciones a validar */
+  queue = mq_open(MQ_NAME, O_CREAT | O_RDONLY, S_IRUSR | S_IWUSR, &attributes);
+  if (queue == (mqd_t)-1) {
+    perror("mq_open");
     exit(EXIT_FAILURE);
   }
-  // TODO: Meter el close(fd_shm);
-  // TODO: Meter el shm_unlink(SHM_NAME);
-  // TODO: Meter el sem_close(sem);
-  // TODO: Meter el sem_unlink(SEM_NAME);
-  /* Si este proceso se para, el sistema detendrá la ejecución del Comprobador (?) */
-  /* Si un minero arranca antes que este proceso, dará un mensaje de error y saldrá del sistema */
+
+  printf("[%d] Checking blocks...\n", getpid());
+  while (!stop) {
+    /* Recibir mensajes de la cola de mensajes */
+    if (mq_receive(queue, (char*)&msg, sizeof(msg), NULL) == -1) {
+      perror("mq_receive");
+      exit(EXIT_FAILURE);
+    }
+
+    /* Guardar info recibida en el bloque */
+    bloque.target = msg.target;
+    bloque.solution = msg.solution;
+    bloque.is_last = msg.is_last;
+
+    if (!msg.is_last) {
+      /* Validar la solución */
+      if (pow_hash(msg.solution) == msg.target) {
+        bloque.is_valid = 1;
+
+        /* Añadir la moneda al ganador*/
+        sem_wait(&shm->sem_mutex);
+        found_wallet = 0;
+
+        /* Buscar la cartera */
+        for (i = 0; i < shm->n_wallets; i++) {
+          if (shm->wallets[i].pid == shm->winner) {
+            shm->wallets[i].coins++;
+            printf("\x1b[36mMiner %d was given their coin, they now have %d coins\x1b[0m\n", shm->wallets[i].pid, shm->wallets[i].coins);
+            found_wallet = 1;
+            break;
+          }
+        }
+
+        /* Registrar la nueva cartera si no existía previamente y cabe en el array */
+        if (!found_wallet && shm->n_wallets < MAX_MINERS) {
+          printf("\x1b[36mMiner %d was broke, gifting them a wallet as well, they now have 1 coin\x1b[0m\n", shm->winner);
+          shm->wallets[shm->n_wallets].pid = shm->winner;
+          shm->wallets[shm->n_wallets].coins = 1;
+          shm->n_wallets++;
+        }
+
+        sem_post(&shm->sem_mutex);
+
+      } else {
+        bloque.is_valid = 0;
+      }
+    }
+
+    /* Informar a Monitor a través de Productor-Consumidor */
+    sem_wait(&shm->sem_empty); /* Down(sem_empty); */
+    sem_wait(&shm->sem_mutex); /* Down(sem_mutex); */
+    /* AñadirElemento(); */
+    shm->buffer[shm->in] = bloque; /* Insertar nuevo elemento */
+    shm->in = (shm->in + 1) % 6;   /* Actualizar índice nuevo elemento en buffer circular */
+    sem_post(&shm->sem_mutex);     /* Up(sem_mutex); */
+    sem_post(&shm->sem_fill);      /* Up(sem_fill); */
+
+    /* Terminar si el programa ha terminado */
+    if (bloque.is_last) {
+      break;
+    }
+
+    /* Esperar el lag */
+    usleep(lag_comprobador * 1000);
+  }
+
+  printf("\x1b[35m[%d] Finishing (Comprobador)\x1b[0m\n", getpid());
+
+  /* Unlink de la cola de mensajes */
+  mq_close(queue);
+  mq_unlink(MQ_NAME);
+
+  /* Liberar la memoria compartida */
+  munmap(shm, sizeof(Shared_Memory));
+}
+
+/**
+ * @brief It initializes the shared memory's info
+ *
+ * @param shm a pointer to the shared memory
+ */
+void init_shm(Shared_Memory* shm) {
+  shm->n_miners = 0;
+  shm->n_participants = 0;
+  shm->n_votes = 0;
+  shm->target = 0;
+  shm->winner = -1;
+  shm->winner_solution = -1;
 }
