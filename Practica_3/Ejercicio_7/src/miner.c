@@ -115,13 +115,6 @@ void controlled_sem_wait(sem_t* sem);
  */
 void sem_post_and_close(sem_t* sem);
 
-/**
- * @brief Abre un semáforo y lleva a cabo su sem_wait con control de errores
- *
- * @param sem el semáforo deseado
- */
-void sem_open_and_wait(sem_t* sem);
-
 /* ---------------------------------------------- Funciones auxiliares ----------------------------------------------- */
 
 /**
@@ -446,8 +439,6 @@ int childLogger(int read_fd, int write_fd) {
               m.round, (intmax_t)ppid, m.target, m.solution, m.yes, (m.yes + m.no), (intmax_t)ppid, m.coins);
     }
 
-    close(out);
-
     /* Enviar OK al minero para que continúe */
     if (write(write_fd, &ok, sizeof(ok)) != (ssize_t)sizeof(ok)) {
       perror("Error escribiendo en la tubería l->m");
@@ -459,6 +450,8 @@ int childLogger(int read_fd, int write_fd) {
       return EXIT_FAILURE;
     }
   }
+
+  close(out);
 
   printf("Logger exited with status %d\n", EXIT_SUCCESS);
   return EXIT_SUCCESS;
@@ -537,6 +530,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     solution = -1;
 
     /* Comenzar a minar esta ronda */
+    m.round++;
     sol = minerRound(current_target, n_threads);
 
     if (shm->n_miners < 2 || expected_participants < 2) {
@@ -1301,14 +1295,4 @@ void controlled_sem_wait(sem_t* sem) {
 void sem_post_and_close(sem_t* sem) {
   sem_post(sem);
   sem_close(sem);
-}
-
-/**
- * @brief Abre un semáforo y lleva a cabo su sem_wait con control de errores
- *
- * @param sem el semáforo deseado
- */
-void sem_open_and_wait(sem_t* sem) {
-  sem = open_mutex();
-  controlled_sem_wait(sem);
 }

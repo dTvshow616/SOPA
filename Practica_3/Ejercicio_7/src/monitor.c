@@ -34,6 +34,10 @@ void comprobador(int lag_comprobador);
  */
 void init_shm(Shared_Memory* shm);
 
+/* ----------------------------------------------- Variables globales ------------------------------------------------ */
+
+volatile sig_atomic_t stop = 0; /* Variable de control para que el minero sepa que se tiene que parar */
+
 /* ----------------------------------------------------- Código ------------------------------------------------------ */
 
 int main(int argc, char* argv[]) {
@@ -69,7 +73,7 @@ int main(int argc, char* argv[]) {
   }
 
   printf("--------------------------------------- The Miner Rush has ended :7 ---------------------------------------\n");
-  printf("                 [?] If your terminal's shit like mine just hit Enter to see it ain't stuck");
+  printf("                                         (I'm not stuck, hit Enter)\n");
 
   return 0;
 }
@@ -114,15 +118,15 @@ void monitor(int lag_monitor) {
 
   init_shm(shm);
 
+  /* Crear los semáforos que compartirán los procesos del sistema */
+  if ((sem_miners = (sem_open(SEM_NAME, O_CREAT | O_EXCL, S_IRUSR | S_IWUSR, 1))) == SEM_FAILED) {
+    sem_miners = sem_open(SEM_NAME, 0);
+  }
+
   /* Semáforos del Productor-Consumidor */
   sem_init(&shm->sem_empty, 1, 6); /* 6 huecos vacíos */
   sem_init(&shm->sem_fill, 1, 0);  /* 0 huecos llenos */
   sem_init(&shm->sem_mutex, 1, 1); /* Mutex a 1 */
-
-  /* Crear los semáforos compartida que compartirán los procesos del sistema */
-  if ((sem_miners = (sem_open(SEM_NAME, O_CREAT | O_EXCL, S_IRUSR | S_IWUSR, 1))) == SEM_FAILED) {
-    sem_miners = sem_open(SEM_NAME, 0);
-  }
 
   printf("[%d] Printing blocks...\n", getpid());
   while (1) {
@@ -153,6 +157,9 @@ void monitor(int lag_monitor) {
 
   printf("\x1b[35m[%d] Finishing (Monitor)\x1b[0m\n", getpid());
 
+  /* Si este proceso se para, el sistema detendrá la ejecución del Comprobador */
+  stop = 1;
+
   /* Destruir los semáforos del Productor-Consumidor */
   sem_destroy(&shm->sem_empty);
   sem_destroy(&shm->sem_fill);
@@ -167,8 +174,6 @@ void monitor(int lag_monitor) {
   sem_unlink(SEM_NAME);
 
   exit(EXIT_SUCCESS);
-
-  /* TODO Si este proceso se para, el sistema detendrá la ejecución del Comprobador (?) */
 }
 
 /**
@@ -197,7 +202,7 @@ void comprobador(int lag_comprobador) {
   }
 
   printf("[%d] Checking blocks...\n", getpid());
-  while (1) {
+  while (!stop) {
     /* Recibir mensajes de la cola de mensajes */
     if (mq_receive(queue, (char*)&msg, sizeof(msg), NULL) == -1) {
       perror("mq_receive");
@@ -215,7 +220,6 @@ void comprobador(int lag_comprobador) {
         bloque.is_valid = 1;
 
         /* Añadir la moneda al ganador*/
-        printf("Giving coin to good miner...\n");
         sem_wait(&shm->sem_mutex);
         found_wallet = 0;
 
@@ -223,7 +227,7 @@ void comprobador(int lag_comprobador) {
         for (i = 0; i < shm->n_wallets; i++) {
           if (shm->wallets[i].pid == shm->winner) {
             shm->wallets[i].coins++;
-            printf("Miner %d was given their coin, they now have %d coins\n", shm->wallets[i].pid, shm->wallets[i].coins);
+            printf("\x1b[36mMiner %d was given their coin, they now have %d coins\x1b[0m\n", shm->wallets[i].pid, shm->wallets[i].coins);
             found_wallet = 1;
             break;
           }
@@ -231,7 +235,7 @@ void comprobador(int lag_comprobador) {
 
         /* Registrar la nueva cartera si no existía previamente y cabe en el array */
         if (!found_wallet && shm->n_wallets < MAX_MINERS) {
-          printf("Miner %d was broke, gifting them a wallet as well, they now have 1 coin\n", shm->winner);
+          printf("\x1b[36mMiner %d was broke, gifting them a wallet as well, they now have 1 coin\x1b[0m\n", shm->winner);
           shm->wallets[shm->n_wallets].pid = shm->winner;
           shm->wallets[shm->n_wallets].coins = 1;
           shm->n_wallets++;
@@ -263,6 +267,13 @@ void comprobador(int lag_comprobador) {
   }
 
   printf("\x1b[35m[%d] Finishing (Comprobador)\x1b[0m\n", getpid());
+
+  /* Unlink de la cola de mensajes */
+  mq_close(queue);
+  mq_unlink(MQ_NAME);
+
+  /* Liberar la memoria compartida */
+  munmap(shm, sizeof(Shared_Memory));
 }
 
 /**
