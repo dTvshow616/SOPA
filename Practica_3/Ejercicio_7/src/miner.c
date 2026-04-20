@@ -319,7 +319,7 @@ int main(int argc, char* argv[]) {
         sem_post(sem);
         sem_close(sem);
 
-        printf("Initial target created: 0\n");
+        printf("--- Initial target created: 0 ---\n");
 
         broadcast_signal_to_miners(SIGUSR1);
         got_usr1 = 1;

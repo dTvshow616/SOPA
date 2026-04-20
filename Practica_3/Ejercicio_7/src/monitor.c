@@ -18,7 +18,7 @@ struct mq_attr attributes = {.mq_flags = 0, .mq_maxmsg = 7, .mq_curmsgs = 0, .mq
 /* ----------------------------------------------- Funciones privadas ------------------------------------------------ */
 
 /**
- * @brief Se encarga de mostrar la salida unificada, hijo de Comprobador
+ * @brief Se encarga de mostrar la salida unificada, hijo de Comprobador. Arranca en primer lugar y finaliza el último
  */
 void monitor(int lag_monitor);
 
@@ -50,6 +50,8 @@ int main(int argc, char* argv[]) {
     return -1;
   }
 
+  printf("---------------------------------------- Welcome to Miner Rush! :] ----------------------------------------\n");
+
   /* Mitosis */
   int pid = fork();
   if (pid < 0) {
@@ -66,19 +68,22 @@ int main(int argc, char* argv[]) {
     wait(NULL);
   }
 
+  printf("--------------------------------------- The Miner Rush has ended :7 ---------------------------------------\n");
+  printf("                 [?] If your terminal's shit like mine just hit Enter to see it ain't stuck");
+
   return 0;
 }
 
 /* ----------------------------------------------- Funciones privadas ------------------------------------------------ */
 
 /**
- * @brief Se encarga de mostrar la salida unificada, hijo de Comprobador
+ * @brief Se encarga de mostrar la salida unificada, hijo de Comprobador. Arranca en primer lugar y finaliza el último
  */
-void monitor(int lag_monitor) { /* NOTE Arranca en primer lugar y finaliza el último */
-  int fd_shm;                   /* Descriptor de fichero de la memoria compartida*/
-  Shared_Memory* shm;           /* Puntero a la memoria compartida*/
-  sem_t* sem_miners;            /* Puntero al semáforo de los mineros */
-  Bloque_Buffer bloque;         /* Bloque del Productor-Consumidor */
+void monitor(int lag_monitor) {
+  int fd_shm;           /* Descriptor de fichero de la memoria compartida*/
+  Shared_Memory* shm;   /* Puntero a la memoria compartida*/
+  sem_t* sem_miners;    /* Puntero al semáforo de los mineros */
+  Bloque_Buffer bloque; /* Bloque del Productor-Consumidor */
 
   /* Crear los segmentos de memoria compartida que compartirán los procesos del sistema */
   fd_shm = shm_open(SHM_NAME, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
@@ -121,7 +126,7 @@ void monitor(int lag_monitor) { /* NOTE Arranca en primer lugar y finaliza el ú
 
   printf("[%d] Printing blocks...\n", getpid());
   while (1) {
-    /* Modelo Consumidor */
+    /* Recibir información de Monitor a través de Productor-Consumidor */
     sem_wait(&shm->sem_fill);  /* Down(sem_fill); */
     sem_wait(&shm->sem_mutex); /* Down(sem_mutex); */
     /* ExtraerElemento(); */
@@ -193,7 +198,7 @@ void comprobador(int lag_comprobador) {
 
   printf("[%d] Checking blocks...\n", getpid());
   while (1) {
-    /* Recibir mensajes de la cola cada LAG_C */
+    /* Recibir mensajes de la cola de mensajes */
     if (mq_receive(queue, (char*)&msg, sizeof(msg), NULL) == -1) {
       perror("mq_receive");
       exit(EXIT_FAILURE);
