@@ -108,6 +108,13 @@ void remove_shared_memory();
  */
 void controlled_sem_wait(sem_t* sem);
 
+/**
+ * @brief Hace Up y close de un semáforo
+ *
+ * @param sem el semáforo deseado
+ */
+void sem_post_and_close(sem_t* sem);
+
 /* ---------------------------------------------- Funciones auxiliares ----------------------------------------------- */
 
 /**
@@ -289,6 +296,7 @@ int main(int argc, char* argv[]) {
     /* Acceso a la cola de mensajes */
     queue = mq_open(MQ_NAME, O_WRONLY);
     if (queue == (mqd_t)-1) {
+      /* Si un minero arranca antes que el Monitor, dará un mensaje de error y saldrá del sistema */
       perror("mq_open");
       exit(EXIT_FAILURE);
     }
@@ -308,6 +316,7 @@ int main(int argc, char* argv[]) {
         shm->target = target;
         shm->n_votes = 0;
         shm->n_participants = 0;
+        sem_post(sem);
         sem_close(sem);
 
         printf("Initial target created: 0\n");
@@ -389,7 +398,7 @@ int childLogger(int read_fd, int write_fd) {
     if (n != (ssize_t)sizeof(m)) {
       fprintf(stderr, "Logger: mensaje incompleto leído (%zd bytes)\n", n);
       close(out);
-      printf("Logger exited unexpectedly\n");
+      printf("Logger exited unexpectedly (mensaje incompleto leído)\n");
       return EXIT_FAILURE;
     }
 
@@ -418,16 +427,15 @@ int childLogger(int read_fd, int write_fd) {
               m.round, (intmax_t)ppid, m.target, m.solution, m.yes, (m.yes + m.no), (intmax_t)ppid, m.coins);
     }
 
+    close(out);
+
     /* Enviar OK al minero para que continúe */
     if (write(write_fd, &ok, sizeof(ok)) != (ssize_t)sizeof(ok)) {
       perror("Error escribiendo en la tubería l->m");
-      close(out);
       printf("Logger exited unexpectedly\n");
       return EXIT_FAILURE;
     }
   }
-
-  close(out);
 
   printf("Logger exited with status %d\n", EXIT_SUCCESS);
   return EXIT_SUCCESS;
@@ -459,6 +467,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
 
   alarm(n_secs);
 
+  printf("[%d] Generating blocks...\n", getpid());
   while (!stop) {
     /* Esperar a que haya al menos dos mineros*/
     if (shm->n_miners < 2) {
@@ -527,8 +536,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       sem = open_mutex();
       controlled_sem_wait(sem);
       shm->n_votes = 0;
-      sem_post(sem);
-      sem_close(sem);
+      sem_post_and_close(sem);
 
       broadcast_signal_to_participants(SIGUSR2);
 
@@ -542,8 +550,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
         shm->n_participants = 0;
         shm->winner = -1;
         shm->winner_solution = -1;
-        sem_post(sem);
-        sem_close(sem);
+        sem_post_and_close(sem);
 
         /* Si hay suficientes mineros para una nueva ronda se manda la señal para comenzar*/
         if (shm->n_miners >= 2) {
@@ -577,8 +584,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
         shm->n_participants = 0;
         shm->winner = -1;
         shm->winner_solution = -1;
-        sem_post(sem);
-        sem_close(sem);
+        sem_post_and_close(sem);
 
         if (shm->n_miners >= 2) {
           broadcast_signal_to_miners(SIGUSR1);
@@ -591,7 +597,8 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       }
 
       /* Imprimir resultados */
-      printf("Winner %d => [ %s] => %s\n", (int)getpid(), votes_str, (yes >= no) ? "\x1b[32mAccepted\x1b[0m" : "\x1b[31mRejected\x1b[0m");
+      /*printf("Winner %d => [ %s] => %s\n", (int)getpid(), votes_str, (yes >= no) ? "\x1b[32mAccepted\x1b[0m" : "\x1b[31mRejected\x1b[0m");*/
+      printf("\x1b[33mWinner %d\x1b[0m\n", (int)getpid());
 
       if (yes >= no) {
         coins++;
@@ -636,8 +643,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       shm->n_participants = 0;
       shm->winner = -1;
       shm->winner_solution = -1;
-      sem_post(sem);
-      sem_close(sem);
+      sem_post_and_close(sem);
 
       current_target = sol;
       target = sol;
@@ -662,8 +668,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     sem = open_mutex();
     controlled_sem_wait(sem);
     proposed = shm->target;
-    sem_post(sem);
-    sem_close(sem);
+    sem_post_and_close(sem);
 
     append_vote(getpid(), (pow_hash(proposed) == current_target) ? 'Y' : 'N');
 
@@ -686,7 +691,8 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     return EXIT_FAILURE;
   }
 
-  printf("Miner exited with status %d\n", EXIT_SUCCESS);
+  /* printf("Miner exited with status %d\n", EXIT_SUCCESS); */
+  printf("\x1b[35m[%d] Finishing (Miner)\x1b[45m\x1b[0m\n", getpid());
   return EXIT_SUCCESS;
 }
 
@@ -850,7 +856,7 @@ void remove_miner(pid_t pid) {
   }
 
   /* Print :3 */
-  printf("\x1b[35mMiner %d exited system\x1b[0m\n", pid);
+  /*printf("\x1b[35mMiner %d exited system\x1b[0m\n", pid);*/
 
   /* Comprobar si queda algún minero en el sistema */
   if (shm->n_miners == 0) {
@@ -1015,8 +1021,7 @@ static void register_target(int target) {
 
   shm->target = target;
 
-  sem_post(sem);
-  sem_close(sem);
+  sem_post_and_close(sem);
 }
 
 /**
@@ -1034,8 +1039,7 @@ static void broadcast_signal_to_miners(int sig) {
     }
   }
 
-  sem_post(sem);
-  sem_close(sem);
+  sem_post_and_close(sem);
 }
 
 /**
@@ -1067,8 +1071,7 @@ static int claim_winner(pid_t pid, int solution) {
     already_claimed = 1;
   }
 
-  sem_post(sem);
-  sem_close(sem);
+  sem_post_and_close(sem);
 
   return !already_claimed;
 }
@@ -1085,8 +1088,7 @@ static void append_vote(pid_t pid, char vote) {
   shm->voter_vote[shm->n_votes] = vote;
   shm->n_votes++;
 
-  sem_post(sem);
-  sem_close(sem);
+  sem_post_and_close(sem);
 }
 
 /**
@@ -1124,8 +1126,7 @@ static void count_votes(int* yes, int* no, char* votes_str, size_t votes_str_siz
     }
   }
 
-  sem_post(sem);
-  sem_close(sem);
+  sem_post_and_close(sem);
 }
 
 /**
@@ -1157,8 +1158,7 @@ static void append_participant(pid_t pid) {
   shm->participants[shm->n_participants] = pid;
   shm->n_participants++;
 
-  sem_post(sem);
-  sem_close(sem);
+  sem_post_and_close(sem);
 }
 
 /**
@@ -1176,12 +1176,13 @@ static void broadcast_signal_to_participants(int sig) {
     }
   }
 
-  sem_post(sem);
-  sem_close(sem);
+  sem_post_and_close(sem);
 }
 
 /**
- * @brief Lleva acabo el sem_wait con control de errores
+ * @brief Lleva acabo el sem_wait con control de errores de un semáforo
+ *
+ * @param sem el semáforo deseado
  */
 void controlled_sem_wait(sem_t* sem) {
   while (sem_wait(sem) < 0) {
@@ -1191,4 +1192,14 @@ void controlled_sem_wait(sem_t* sem) {
       exit(EXIT_FAILURE);
     }
   }
+}
+
+/**
+ * @brief Hace Up y close de un semáforo
+ *
+ * @param sem el semáforo deseado
+ */
+void sem_post_and_close(sem_t* sem) {
+  sem_post(sem);
+  sem_close(sem);
 }

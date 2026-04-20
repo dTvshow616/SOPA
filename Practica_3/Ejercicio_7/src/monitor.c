@@ -115,13 +115,14 @@ void monitor(int lag_monitor) { /* NOTE Arranca en primer lugar y finaliza el ú
   sem_init(&shm->sem_mutex, 1, 1); /* Mutex a 1 */
 
   /* Crear los semáforos compartida que compartirán los procesos del sistema */
-  if ((sem_miners = (sem_open(SEM_NAME, O_CREAT | O_EXCL, S_IRUSR | S_IWUSR, 0))) == SEM_FAILED) {
+  if ((sem_miners = (sem_open(SEM_NAME, O_CREAT | O_EXCL, S_IRUSR | S_IWUSR, 1))) == SEM_FAILED) {
     sem_miners = sem_open(SEM_NAME, 0);
   }
 
+  printf("[%d] Printing blocks...\n", getpid());
   while (1) {
     /* Modelo Consumidor */
-    sem_wait(&shm->sem_fill);  /* Down (sem_fill); */
+    sem_wait(&shm->sem_fill);  /* Down(sem_fill); */
     sem_wait(&shm->sem_mutex); /* Down(sem_mutex); */
     /* ExtraerElemento(); */
     bloque = shm->buffer[shm->out]; /* Extraer último elemento */
@@ -136,14 +137,16 @@ void monitor(int lag_monitor) { /* NOTE Arranca en primer lugar y finaliza el ú
 
     /* Prints :3 */
     if (bloque.is_valid == 1) {
-      printf("Solution accepted: %08ld --> %08ld\n", bloque.target, bloque.solution);
+      printf("Solution \x1b[32maccepted\x1b[0m: %08ld --> %08ld\n", bloque.target, bloque.solution);
     } else {
-      printf("Solution rejected: %08ld !-> %08ld\n", bloque.target, bloque.solution);
+      printf("Solution \x1b[31mrejected\x1b[0m: %08ld !-> %08ld\n", bloque.target, bloque.solution);
     }
 
     /* Esperar el lag */
     usleep(lag_monitor * 1000);
   }
+
+  printf("\x1b[35m[%d] Finishing (Monitor)\x1b[0m\n", getpid());
 
   /* Destruir los semáforos del Productor-Consumidor */
   sem_destroy(&shm->sem_empty);
@@ -160,8 +163,7 @@ void monitor(int lag_monitor) { /* NOTE Arranca en primer lugar y finaliza el ú
 
   exit(EXIT_SUCCESS);
 
-  /* REVIEW Si este proceso se para, el sistema detendrá la ejecución del Comprobador (?) */
-  /* REVIEW Si un minero arranca antes que este proceso, dará un mensaje de error y saldrá del sistema */
+  /* TODO Si este proceso se para, el sistema detendrá la ejecución del Comprobador (?) */
 }
 
 /**
@@ -189,6 +191,7 @@ void comprobador(int lag_comprobador) {
     exit(EXIT_FAILURE);
   }
 
+  printf("[%d] Checking blocks...\n", getpid());
   while (1) {
     /* Recibir mensajes de la cola cada LAG_C */
     if (mq_receive(queue, (char*)&msg, sizeof(msg), NULL) == -1) {
@@ -250,6 +253,8 @@ void comprobador(int lag_comprobador) {
     /* Esperar el lag */
     usleep(lag_comprobador * 1000);
   }
+
+  printf("\x1b[35m[%d] Finishing (Comprobador)\x1b[0m\n", getpid());
 }
 
 /**

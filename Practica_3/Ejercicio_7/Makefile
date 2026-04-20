@@ -48,7 +48,7 @@ endif
 
 run: all
 	@echo "Lanzando el Monitor primero..."
-	./$(EXEC2) 500 1000 &
+	./$(EXEC2) 10 10 &
 	@sleep 1
 	@echo "Lanzando los Mineros..."
 	./$(EXEC1) 10 8000 & ./$(EXEC1) 20 8000 & ./$(EXEC1) 30 8000 &
