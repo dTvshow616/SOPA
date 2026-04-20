@@ -319,7 +319,7 @@ int main(int argc, char* argv[]) {
         sem_post(sem);
         sem_close(sem);
 
-        printf("--- Initial target created: 0 ---\n");
+        printf("\n--- Initial target created: 0 ---\n\n");
 
         broadcast_signal_to_miners(SIGUSR1);
         got_usr1 = 1;
@@ -346,6 +346,7 @@ int main(int argc, char* argv[]) {
   /* Abandonar la memoria compartida */
   remove_shared_memory();
 
+  /* Cerrar la cola de mensajes */
   mq_close(queue);
 
   exit(EXIT_SUCCESS);
@@ -374,6 +375,10 @@ int childLogger(int read_fd, int write_fd) {
   if (out == -1) {
     perror("Error abriendo el fichero");
     printf("Logger exited unexpectedly\n");
+    /* Abandonar la memoria compartida */
+    remove_shared_memory();
+    /* Cerrar la cola de mensajes */
+    mq_close(queue);
     return EXIT_FAILURE;
   }
 
@@ -391,6 +396,10 @@ int childLogger(int read_fd, int write_fd) {
       perror("read(pipe)");
       close(out);
       printf("Logger exited unexpectedly\n");
+      /* Abandonar la memoria compartida */
+      remove_shared_memory();
+      /* Cerrar la cola de mensajes */
+      mq_close(queue);
       return EXIT_FAILURE;
     }
 
@@ -399,6 +408,10 @@ int childLogger(int read_fd, int write_fd) {
       fprintf(stderr, "Logger: mensaje incompleto leído (%zd bytes)\n", n);
       close(out);
       printf("Logger exited unexpectedly (mensaje incompleto leído)\n");
+      /* Abandonar la memoria compartida */
+      remove_shared_memory();
+      /* Cerrar la cola de mensajes */
+      mq_close(queue);
       return EXIT_FAILURE;
     }
 
@@ -433,6 +446,10 @@ int childLogger(int read_fd, int write_fd) {
     if (write(write_fd, &ok, sizeof(ok)) != (ssize_t)sizeof(ok)) {
       perror("Error escribiendo en la tubería l->m");
       printf("Logger exited unexpectedly\n");
+      /* Abandonar la memoria compartida */
+      remove_shared_memory();
+      /* Cerrar la cola de mensajes */
+      mq_close(queue);
       return EXIT_FAILURE;
     }
   }
@@ -615,6 +632,10 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       if (write(write_fd, &m, sizeof(m)) == -1) {
         perror("write(pipe)");
         printf("Miner exited unexpectedly\n");
+        /* Abandonar la memoria compartida */
+        remove_shared_memory();
+        /* Cerrar la cola de mensajes */
+        mq_close(queue);
         return EXIT_FAILURE;
       }
 
@@ -622,18 +643,30 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       if (n == 0) {
         fprintf(stderr, "Miner: logger cerró la pipe antes de tiempo\n");
         printf("Miner exited unexpectedly\n");
+        /* Abandonar la memoria compartida */
+        remove_shared_memory();
+        /* Cerrar la cola de mensajes */
+        mq_close(queue);
         return EXIT_FAILURE;
       }
 
       if (n != (ssize_t)sizeof(ok)) {
         perror("Error leyendo en la tubería l->m");
         printf("Miner exited unexpectedly\n");
+        /* Abandonar la memoria compartida */
+        remove_shared_memory();
+        /* Cerrar la cola de mensajes */
+        mq_close(queue);
         return EXIT_FAILURE;
       }
 
       if (ok != 1) {
         fprintf(stderr, "Error leyendo en la tubería l->m, ok=(%d)\n", ok);
         printf("Miner exited unexpectedly\n");
+        /* Abandonar la memoria compartida */
+        remove_shared_memory();
+        /* Cerrar la cola de mensajes */
+        mq_close(queue);
         return EXIT_FAILURE;
       }
 
@@ -688,6 +721,10 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
   if (write(write_fd, &m, sizeof(m)) == -1) {
     perror("write(pipe)");
     printf("Miner exited unexpectedly\n");
+    /* Abandonar la memoria compartida */
+    remove_shared_memory();
+    /* Cerrar la cola de mensajes */
+    mq_close(queue);
     return EXIT_FAILURE;
   }
 
@@ -800,6 +837,10 @@ int add_miner(pid_t pid) {
     if (errno != EINTR) {
       perror("sem_wait");
       sem_close(sem);
+      /* Abandonar la memoria compartida */
+      remove_shared_memory();
+      /* Cerrar la cola de mensajes */
+      mq_close(queue);
       exit(EXIT_FAILURE);
     }
   }
@@ -877,7 +918,7 @@ void remove_miner(pid_t pid) {
 
   /* Terminar el programa si no quedan mineros */
   if (no_miners_left) {
-    printf("No miners left :/\n");
+    printf("\n--- X No miners left ---\n\n");
 
     /* Enviar mensaje con finalización a la cola de mensajes */
     msg.target = shm->target;
@@ -886,6 +927,10 @@ void remove_miner(pid_t pid) {
 
     if (mq_send(queue, (char*)&msg, sizeof(msg), 1) == -1) {
       perror("mq_send");
+      /* Abandonar la memoria compartida */
+      remove_shared_memory();
+      /* Cerrar la cola de mensajes */
+      mq_close(queue);
       exit(EXIT_FAILURE);
     }
   }
@@ -899,6 +944,10 @@ void access_shared_memory() {
   int fd_shm = shm_open(SHM_NAME, O_RDWR, 0);
   if (fd_shm == -1) {
     perror("shm_open");
+    /* Abandonar la memoria compartida */
+    remove_shared_memory();
+    /* Cerrar la cola de mensajes */
+    mq_close(queue);
     exit(EXIT_FAILURE);
   }
 
@@ -907,6 +956,8 @@ void access_shared_memory() {
   close(fd_shm);
   if (shm == MAP_FAILED) {
     perror("mmap");
+    /* Cerrar la cola de mensajes */
+    mq_close(queue);
     exit(EXIT_FAILURE);
   }
 }
@@ -916,7 +967,7 @@ void access_shared_memory() {
  */
 void remove_shared_memory() {
   /* Eliminar la memoria compartida del espacio de direcciones con munmap */
-  if (munmap(NULL, sizeof(Shared_Memory)) == -1) {
+  if (munmap(shm, sizeof(Shared_Memory)) == -1) {
     perror("unmap");
     exit(EXIT_FAILURE);
   }
@@ -939,18 +990,30 @@ static void setup_signal_handlers(void) {
   act.sa_handler = handler_sigalrm;
   if (sigaction(SIGALRM, &act, NULL) < 0) {
     perror("sigaction(SIGALRM)");
+    /* Abandonar la memoria compartida */
+    remove_shared_memory();
+    /* Cerrar la cola de mensajes */
+    mq_close(queue);
     exit(EXIT_FAILURE);
   }
 
   act.sa_handler = handler_sigusr1;
   if (sigaction(SIGUSR1, &act, NULL) < 0) {
     perror("sigaction(SIGUSR1)");
+    /* Abandonar la memoria compartida */
+    remove_shared_memory();
+    /* Cerrar la cola de mensajes */
+    mq_close(queue);
     exit(EXIT_FAILURE);
   }
 
   act.sa_handler = handler_sigusr2;
   if (sigaction(SIGUSR2, &act, NULL) < 0) {
     perror("sigaction(SIGUSR2)");
+    /* Abandonar la memoria compartida */
+    remove_shared_memory();
+    /* Cerrar la cola de mensajes */
+    mq_close(queue);
     exit(EXIT_FAILURE);
   }
 }
@@ -1005,6 +1068,10 @@ static sem_t* open_mutex(void) {
 
   if (sem == SEM_FAILED) {
     perror("sem_open");
+    /* Abandonar la memoria compartida */
+    remove_shared_memory();
+    /* Cerrar la cola de mensajes */
+    mq_close(queue);
     exit(EXIT_FAILURE);
   }
 
@@ -1064,6 +1131,10 @@ static int claim_winner(pid_t pid, int solution) {
 
     if (mq_send(queue, (char*)&msg, sizeof(msg), 1) == -1) {
       perror("mq_send");
+      /* Abandonar la memoria compartida */
+      remove_shared_memory();
+      /* Cerrar la cola de mensajes */
+      mq_close(queue);
       exit(EXIT_FAILURE);
     }
 
@@ -1189,6 +1260,10 @@ void controlled_sem_wait(sem_t* sem) {
     if (errno != EINTR) {
       perror("sem_wait");
       sem_close(sem);
+      /* Abandonar la memoria compartida */
+      remove_shared_memory();
+      /* Cerrar la cola de mensajes */
+      mq_close(queue);
       exit(EXIT_FAILURE);
     }
   }

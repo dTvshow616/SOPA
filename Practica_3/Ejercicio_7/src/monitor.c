@@ -215,6 +215,7 @@ void comprobador(int lag_comprobador) {
         bloque.is_valid = 1;
 
         /* Añadir la moneda al ganador*/
+        printf("Giving coin to good miner...\n");
         sem_wait(&shm->sem_mutex);
         found_wallet = 0;
 
@@ -222,6 +223,7 @@ void comprobador(int lag_comprobador) {
         for (i = 0; i < shm->n_wallets; i++) {
           if (shm->wallets[i].pid == shm->winner) {
             shm->wallets[i].coins++;
+            printf("Miner %d was given their coin, they now have %d coins\n", shm->wallets[i].pid, shm->wallets[i].coins);
             found_wallet = 1;
             break;
           }
@@ -229,6 +231,7 @@ void comprobador(int lag_comprobador) {
 
         /* Registrar la nueva cartera si no existía previamente y cabe en el array */
         if (!found_wallet && shm->n_wallets < MAX_MINERS) {
+          printf("Miner %d was broke, gifting them a wallet as well, they now have 1 coin\n", shm->winner);
           shm->wallets[shm->n_wallets].pid = shm->winner;
           shm->wallets[shm->n_wallets].coins = 1;
           shm->n_wallets++;
