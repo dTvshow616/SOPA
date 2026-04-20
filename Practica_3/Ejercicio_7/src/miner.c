@@ -115,6 +115,13 @@ void controlled_sem_wait(sem_t* sem);
  */
 void sem_post_and_close(sem_t* sem);
 
+/**
+ * @brief Abre un semáforo y lleva a cabo su sem_wait con control de errores
+ *
+ * @param sem el semáforo deseado
+ */
+void sem_open_and_wait(sem_t* sem);
+
 /* ---------------------------------------------- Funciones auxiliares ----------------------------------------------- */
 
 /**
@@ -233,7 +240,7 @@ int main(int argc, char* argv[]) {
   int n_threads, res, n_secs = 0;
   int is_first = 0;
   pid_t pid;
-  sem_t* sem;
+  sem_t* sem = NULL;
 
   /* Parsear los argumentos de entrada */
   if (argc != 3) {
@@ -316,8 +323,7 @@ int main(int argc, char* argv[]) {
         shm->target = target;
         shm->n_votes = 0;
         shm->n_participants = 0;
-        sem_post(sem);
-        sem_close(sem);
+        sem_post_and_close(sem);
 
         printf("\n--- Initial target created: 0 ---\n\n");
 
@@ -479,7 +485,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
   char votes_str[256];
   ssize_t n = 0;
   msg_t m;
-  sem_t* sem;
+  sem_t* sem = NULL;
   int w, i = 0;
 
   alarm(n_secs);
@@ -627,7 +633,17 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       m.accepted = (yes >= no) ? 1 : 0;
       m.yes = yes;
       m.no = no;
-      m.coins = coins;
+
+      m.coins = 0;
+      sem = open_mutex();
+      controlled_sem_wait(sem);
+      for (i = 0; i < shm->n_wallets; i++) {
+        if (shm->wallets[i].pid == getpid()) {
+          m.coins = shm->wallets[i].coins;
+          break;
+        }
+      }
+      sem_post_and_close(sem);
 
       if (write(write_fd, &m, sizeof(m)) == -1) {
         perror("write(pipe)");
@@ -859,12 +875,12 @@ int add_miner(pid_t pid) {
   printf("\x1b[34mMiner %d added to system\x1b[0m\n", pid);
   printf("Current miners: ");
   for (i = 0; i < shm->n_miners; i++) {
-    printf("%d ", shm->miners[i]);
+    printf("\x1b[34m%d ", shm->miners[i]);
   }
-  printf("\n");
+  printf("\x1b[0m\n");
 
   /* Indicar que ya está libre la información para los mineros */
-  sem_post(open_mutex());
+  sem_post_and_close(sem);
 
   /* Empezar la ronda si ya había uno, si hay más la ronda ya ha empezado */
   if (count_before == 1) {
@@ -879,11 +895,12 @@ int add_miner(pid_t pid) {
  */
 void remove_miner(pid_t pid) {
   int no_miners_left = 0;
-  sem_t* sem = open_mutex();
+  sem_t* sem = NULL;
   int i = 0;
   Minero_Comprobador msg;
 
   /* Esperar para acceder a la información para los mineros */
+  sem = open_mutex();
   controlled_sem_wait(sem);
 
   /* Desapuntarse de la ronda */
@@ -908,13 +925,13 @@ void remove_miner(pid_t pid) {
   if (!no_miners_left) {
     printf("Current miners: ");
     for (i = 0; i < shm->n_miners; i++) {
-      printf("%d ", shm->miners[i]);
+      printf("\x1b[34m%d ", shm->miners[i]);
     }
-    printf("\n");
+    printf("\x1b[0m\n");
   }
 
   /* Indicar que ya está libre la información para los mineros */
-  sem_post(open_mutex());
+  sem_post_and_close(sem);
 
   /* Terminar el programa si no quedan mineros */
   if (no_miners_left) {
@@ -1082,8 +1099,9 @@ static sem_t* open_mutex(void) {
  * @brief Función para escribir el target a buscar en la memoria compartida
  */
 static void register_target(int target) {
-  sem_t* sem = open_mutex();
+  sem_t* sem = NULL;
 
+  sem = open_mutex();
   controlled_sem_wait(sem);
 
   shm->target = target;
@@ -1095,9 +1113,10 @@ static void register_target(int target) {
  * @brief Función para mandar la señal indicada a los mineros del sistema
  */
 static void broadcast_signal_to_miners(int sig) {
-  sem_t* sem = open_mutex();
+  sem_t* sem = NULL;
   int i = 0;
 
+  sem = open_mutex();
   controlled_sem_wait(sem);
 
   for (i = 0; i < shm->n_miners; i++) {
@@ -1113,10 +1132,11 @@ static void broadcast_signal_to_miners(int sig) {
  * @brief Función para declararse winner de la ronda
  */
 static int claim_winner(pid_t pid, int solution) {
-  sem_t* sem = open_mutex();
+  sem_t* sem = NULL;
   int already_claimed = 0;
   Minero_Comprobador msg;
 
+  sem = open_mutex();
   controlled_sem_wait(sem);
 
   /* Si no hay ganador, este proceso se delcara ganador */
@@ -1151,8 +1171,9 @@ static int claim_winner(pid_t pid, int solution) {
  * @brief Funcion para añadir un voto a la lista de votos en la memoria compartida
  */
 static void append_vote(pid_t pid, char vote) {
-  sem_t* sem = open_mutex();
+  sem_t* sem = NULL;
 
+  sem = open_mutex();
   controlled_sem_wait(sem);
 
   shm->voter[shm->n_votes] = pid;
@@ -1166,7 +1187,7 @@ static void append_vote(pid_t pid, char vote) {
  * @brief Función para contar los votos en un archivo
  */
 static void count_votes(int* yes, int* no, char* votes_str, size_t votes_str_size) {
-  sem_t* sem = open_mutex();
+  sem_t* sem = NULL;
   char vote;
   size_t used = 0;
   int i = 0;
@@ -1178,6 +1199,7 @@ static void count_votes(int* yes, int* no, char* votes_str, size_t votes_str_siz
     votes_str[0] = '\0';
   }
 
+  sem = open_mutex();
   controlled_sem_wait(sem);
 
   for (i = 0; i < shm->n_votes; i++) {
@@ -1222,8 +1244,9 @@ static void wait_for_usr2(void) {
  * @brief Funcion para añadir un proceso a la lista de participantes de la ronda
  */
 static void append_participant(pid_t pid) {
-  sem_t* sem = open_mutex();
+  sem_t* sem = NULL;
 
+  sem = open_mutex();
   controlled_sem_wait(sem);
 
   shm->participants[shm->n_participants] = pid;
@@ -1236,9 +1259,10 @@ static void append_participant(pid_t pid) {
  * @brief Función para mandar una señal a todos los participantes de la ronda actual
  */
 static void broadcast_signal_to_participants(int sig) {
-  sem_t* sem = open_mutex();
+  sem_t* sem = NULL;
   int i = 0;
 
+  sem = open_mutex();
   controlled_sem_wait(sem);
 
   for (i = 0; i < shm->n_participants; i++) {
@@ -1251,7 +1275,7 @@ static void broadcast_signal_to_participants(int sig) {
 }
 
 /**
- * @brief Lleva acabo el sem_wait con control de errores de un semáforo
+ * @brief Lleva a cabo el sem_wait con control de errores de un semáforo
  *
  * @param sem el semáforo deseado
  */
@@ -1277,4 +1301,14 @@ void controlled_sem_wait(sem_t* sem) {
 void sem_post_and_close(sem_t* sem) {
   sem_post(sem);
   sem_close(sem);
+}
+
+/**
+ * @brief Abre un semáforo y lleva a cabo su sem_wait con control de errores
+ *
+ * @param sem el semáforo deseado
+ */
+void sem_open_and_wait(sem_t* sem) {
+  sem = open_mutex();
+  controlled_sem_wait(sem);
 }
