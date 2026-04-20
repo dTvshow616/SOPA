@@ -18,6 +18,8 @@
 #include <time.h>      /* Defines four variable types, two macro and various functions for manipulating date and time */
 #include <unistd.h>    /* POSIX operating system API */
 
+#include "pow.h" /* Librería interna para el POW */
+
 #define SHM_NAME "/shared_memory" /* Memoria compartida de todos los procesos */
 #define SEM_NAME "/semaphore"     /* Semáforo para gestionar el acceso al fichero de mineros */
 #define MQ_NAME "/message_queue"  /* Cola de mensajes entre procesos */

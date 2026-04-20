@@ -2,8 +2,8 @@
  * @file monitor.c
  * @author Carlos Mendez & Ana Olsson
  * @brief Miner Rush program
- * @version 1.1
- * @date 2026-04-19
+ * @version 2.1
+ * @date 2026-04-20
  */
 
 #include "miner_rush.h" /* Librería que define variables y librerías globales para todos los procesos */
@@ -69,7 +69,6 @@ int main(int argc, char* argv[]) {
  */
 void monitor(int lag_monitor) { /* NOTE Arranca en primer lugar y finaliza el último */
   int fd_shm;                   /* Descriptor de fichero de la memoria compartida*/
-  int* mapped = NULL;           /* Puntero al segmento de memoria compartida */
   Shared_Memory* shm;           /* Puntero a la memoria compartida*/
   sem_t* sem_miners;            /* Puntero al semáforo de los mineros */
   Bloque_Buffer bloque;         /* Bloque del Productor-Consumidor */

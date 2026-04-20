@@ -2,12 +2,11 @@
  * @file miner.c
  * @author Carlos Mendez & Ana Olsson
  * @brief Miner Rush program
- * @version 5.1
- * @date 2026-04-19
+ * @version 6.1
+ * @date 2026-04-20
  */
 
 #include "miner_rush.h" /* Librería que define variables y librerías globales para todos los procesos */
-#include "pow.h"        /* Librería interna para el POW */
 
 /* --------------------------------------------------- Estructuras --------------------------------------------------- */
 
