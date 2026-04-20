@@ -13,12 +13,12 @@
 /**
  * @brief Se encarga de mostrar la salida unificada, hijo de Comprobador
  */
-void monitor(int lag_monitor, int fd_shm, sem_t* sem);
+void monitor(int lag_monitor);
 
 /**
  * @brief Se encarga de recibir los bloques por cola de mensajes y validarlos, padre de Monitor
  */
-void comprobador(int lag_comprobador, mqd_t queue);
+void comprobador(int lag_comprobador);
 
 /**
  * @brief It initializes the shared memory's info
@@ -30,9 +30,6 @@ void init_shm(Shared_Memory* shm);
 /* ----------------------------------------------------- Código ------------------------------------------------------ */
 
 int main(int argc, char* argv[]) {
-  int fd_shm;                       /* Descriptor del fichero de memoria compartida */
-  sem_t* sem;                       /* Semáforo de los mineros */
-  mqd_t queue;                      /* La cola de mensajes */
   int lag_comprobador, lag_monitor; /* Retraso en milisegundos de cada cosa */
 
   if (argc != 3) {
@@ -53,28 +50,14 @@ int main(int argc, char* argv[]) {
     exit(EXIT_FAILURE);
 
   } else if (pid == 0) { /* Monitor */
-    monitor(lag_monitor, fd_shm, sem);
+    monitor(lag_monitor);
 
   } else { /* Comprobador */
-    comprobador(lag_comprobador, queue);
+    comprobador(lag_comprobador);
+
+    /* Ser buen padre */
+    wait(NULL);
   }
-
-  /* Ser buen padre */
-  wait(NULL);
-
-  /* Cerrar y borrar la memoria compartida */
-  close(fd_shm);
-  shm_unlink(SHM_NAME);
-
-  /* Cerrar y borrar  el semáforo de los mineros */
-  sem_close(sem);
-  sem_unlink(SEM_NAME);
-
-  /* Cerrar y borrar la cola de mensajes */
-  mq_close(queue);
-  mq_unlink(MQ_NAME);
-
-  exit(EXIT_SUCCESS);
 
   return 0;
 }
@@ -84,9 +67,12 @@ int main(int argc, char* argv[]) {
 /**
  * @brief Se encarga de mostrar la salida unificada, hijo de Comprobador
  */
-void monitor(int lag_monitor, int fd_shm, sem_t* sem) { /* REVIEW Arranca en primer lugar y finaliza el último */
-  int* mapped = NULL;                                   /* Puntero al segmento de memoria compartida */
-  Shared_Memory* shm;                                   /* Puntero a la memoria compartida*/
+void monitor(int lag_monitor) { /* NOTE Arranca en primer lugar y finaliza el último */
+  int fd_shm;                   /* Descriptor de fichero de la memoria compartida*/
+  int* mapped = NULL;           /* Puntero al segmento de memoria compartida */
+  Shared_Memory* shm;           /* Puntero a la memoria compartida*/
+  sem_t* sem_miners;            /* Puntero al semáforo de los mineros */
+  Bloque_Buffer bloque;         /* Bloque del Productor-Consumidor */
 
   /* Crear los segmentos de memoria compartida que compartirán los procesos del sistema */
   fd_shm = shm_open(SHM_NAME, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
@@ -113,25 +99,82 @@ void monitor(int lag_monitor, int fd_shm, sem_t* sem) { /* REVIEW Arranca en pri
   }
 
   shm = mmap(NULL, sizeof(Shared_Memory), PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm, 0);
+  close(fd_shm);
+
   init_shm(shm);
 
+  /* Semáforos del Productor-Consumidor */
+  sem_init(&shm->sem_empty, 1, 6); /* 6 huecos vacíos */
+  sem_init(&shm->sem_fill, 1, 0);  /* 0 huecos llenos */
+  sem_init(&shm->sem_mutex, 1, 1); /* Mutex a 1 */
+
   /* Crear los semáforos compartida que compartirán los procesos del sistema */
-  if ((sem = (sem_open(SEM_NAME, O_CREAT | O_EXCL, S_IRUSR | S_IWUSR, 0))) == SEM_FAILED) {
-    perror("sem_open");
-    exit(EXIT_FAILURE);
+  if ((sem_miners = (sem_open(SEM_NAME, O_CREAT | O_EXCL, S_IRUSR | S_IWUSR, 0))) == SEM_FAILED) {
+    sem_miners = sem_open(SEM_NAME, 0);
   }
 
-  // TOD: EL resto de cosillas
+  while (1) {
+    /* Modelo Consumidor */
+    sem_wait(&shm->sem_fill);  /* Down (sem_fill); */
+    sem_wait(&shm->sem_mutex); /* Down(sem_mutex); */
+    /* ExtraerElemento(); */
+    bloque = shm->buffer[shm->out]; /* Extraer último elemento */
+    shm->out = (shm->out + 1) % 6;  /* Actualizar índice último elemento en buffer circular */
+    sem_post(&shm->sem_mutex);      /* Up(sem_mutex); */
+    sem_post(&shm->sem_empty);      /* Up(sem_empty); */
 
-  /* TODO Si este proceso se para, el sistema detendrá la ejecución del Comprobador (?) */
-  /* TODO Si un minero arranca antes que este proceso, dará un mensaje de error y saldrá del sistema */
+    /* Terminar si el programa ha terminado */
+    if (bloque.is_last) {
+      break;
+    }
+
+    /* Prints :3 */
+    if (bloque.is_valid == 1) {
+      printf("Solution accepted: %08ld --> %08ld\n", bloque.target, bloque.solution);
+    } else {
+      printf("Solution rejected: %08ld !-> %08ld\n", bloque.target, bloque.solution);
+    }
+
+    /* Esperar el lag */
+    usleep(lag_monitor * 1000);
+  }
+
+  /* Destruir los semáforos del Productor-Consumidor */
+  sem_destroy(&shm->sem_empty);
+  sem_destroy(&shm->sem_fill);
+  sem_destroy(&shm->sem_mutex);
+
+  /* Liberar la memoria compartida */
+  munmap(shm, sizeof(Shared_Memory));
+  shm_unlink(SHM_NAME);
+
+  /* Cerrar y borrar el semáforo de los mineros */
+  sem_close(sem_miners);
+  sem_unlink(SEM_NAME);
+
+  exit(EXIT_SUCCESS);
+
+  /* REVIEW Si este proceso se para, el sistema detendrá la ejecución del Comprobador (?) */
+  /* REVIEW Si un minero arranca antes que este proceso, dará un mensaje de error y saldrá del sistema */
 }
 
 /**
  * @brief Se encarga de recibir los bloques por cola de mensajes y validarlos, padre de Monitor
  */
-void comprobador(int lag_comprobador, mqd_t queue) {
-  Minero_Comprobador msg;
+void comprobador(int lag_comprobador) {
+  Minero_Comprobador msg;      /* El mensaje de la cola de mensajes */
+  Shared_Memory* shm;          /* Puntero a la memoria compartida*/
+  mqd_t queue;                 /* La cola de mensajes */
+  int i, fd_shm, found_wallet; /* Variable de bucle, descriptor del fichero de memoria compartida y si se ha encontrado la cartera */
+  Bloque_Buffer bloque;        /* Bloque que será añadido al buffer del modelo Productor-Consumidor */
+
+  /* Dar mini retardo para que se cree la memoria compartida */
+  usleep(100000);
+
+  /* Acceder a la memoria compartida creada por Monitor */
+  fd_shm = shm_open(SHM_NAME, O_RDWR, 0);
+  shm = mmap(NULL, sizeof(Shared_Memory), PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm, 0);
+  close(fd_shm);
 
   /* Crear la cola de mensajes por donde le llegarán las soluciones a validar */
   queue = mq_open(MQ_NAME, O_CREAT | O_RDONLY, S_IRUSR | S_IWUSR, &attributes);
@@ -141,20 +184,57 @@ void comprobador(int lag_comprobador, mqd_t queue) {
   }
 
   while (1) {
-    /* Recibir mensajes de la cola */
+    /* Recibir mensajes de la cola cada LAG_C */
     if (mq_receive(queue, (char*)&msg, sizeof(msg), NULL) == -1) {
       perror("mq_receive");
       exit(EXIT_FAILURE);
     }
 
-    if (msg.is_last == 1) {
-      /* TODO Introducir bloque de fin en memoria compartida para el Monitor */
-      /* ... código del Productor ... */
-      break;
+    /* Guardar info recibida en el bloque */
+    bloque.target = msg.target;
+    bloque.solution = msg.solution;
+    bloque.is_last = msg.is_last;
+
+    if (!msg.is_last) {
+      /* Validar la solución */
+      if (pow_hash(msg.solution) == msg.target) {
+        bloque.is_valid = 1;
+
+        /* Añadir la moneda al ganador*/
+        sem_wait(&shm->sem_mutex);
+        found_wallet = 0;
+
+        /* Buscar la cartera */
+        for (i = 0; i < shm->n_wallets; i++) {
+          if (shm->wallets[i].pid == shm->winner) {
+            shm->wallets[i].coins++;
+            found_wallet = 1;
+            break;
+          }
+        }
+
+        /* Registrar la nueva cartera si no existía previamente y cabe en el array */
+        if (!found_wallet && shm->n_wallets < MAX_MINERS) {
+          shm->wallets[shm->n_wallets].pid = shm->winner;
+          shm->wallets[shm->n_wallets].coins = 1;
+          shm->n_wallets++;
+        }
+
+        sem_post(&shm->sem_mutex);
+
+      } else {
+        bloque.is_valid = 0;
+      }
     }
 
-    /* TODO 3. Comprobar validez, introducir en memoria compartida (Productor) */
-    /* ... código del Productor ... */
+    /* Informar a Monitor a través de Productor-Consumidor */
+    sem_wait(&shm->sem_empty); /* Down(sem_empty); */
+    sem_wait(&shm->sem_mutex); /* Down(sem_mutex); */
+    /* AñadirElemento(); */
+    shm->buffer[shm->in] = bloque; /* Insertar nuevo elemento */
+    shm->in = (shm->in + 1) % 6;   /* Actualizar índice nuevo elemento en buffer circular */
+    sem_post(&shm->sem_mutex);     /* Up(sem_mutex); */
+    sem_post(&shm->sem_fill);      /* Up(sem_fill); */
 
     /* Esperar el lag */
     usleep(lag_comprobador * 1000);

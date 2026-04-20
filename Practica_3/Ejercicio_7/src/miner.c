@@ -288,7 +288,7 @@ int main(int argc, char* argv[]) {
     access_shared_memory();
 
     /* Acceso a la cola de mensajes */
-    queue = mq_open(MQ_NAME, O_WRONLY, S_IRUSR | S_IWUSR, &attributes);
+    queue = mq_open(MQ_NAME, O_WRONLY);
     if (queue == (mqd_t)-1) {
       perror("mq_open");
       exit(EXIT_FAILURE);

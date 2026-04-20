@@ -26,6 +26,24 @@
 #define MAX_VOTE_WAIT 50 /* Tiempo máximo a esperar por los votos de los mineros (en segundos) */
 
 /**
+ * @brief Bloque para el buffer circular
+ */
+typedef struct {
+  long target;   /* Número a buscar (el objetivo a obtener) */
+  long solution; /* Solución encontrada por el ganador */
+  int is_valid;  /* Si la validación e so no correcta */
+  int is_last;   /* 1 si se ha acabado el programa, 0 si no */
+} Bloque_Buffer;
+
+/**
+ * @brief Estructura para las carteras
+ */
+typedef struct {
+  pid_t pid;
+  int coins;
+} Wallet;
+
+/**
  * @brief Estructura de la memoria compartida, toda la info de los ficheros ahora va aquí
  */
 typedef struct {
@@ -34,7 +52,7 @@ typedef struct {
   int n_miners;             /* Número de mineros actual */
 
   /* Datos del antiguo target.txt */
-  int target; /* Número a buscar */
+  int target; /* Número a buscar (el objetivo a obtener) */
 
   /* Datos del antiguo winner.txt */
   pid_t winner;        /* PID del ganador */
@@ -50,7 +68,20 @@ typedef struct {
   int n_participants;             /* Número de participantes actual */
 
   /* Carteras de los mineros */
-  int wallets[MAX_MINERS];
+  Wallet wallets[MAX_MINERS]; /* Las carteras de los mineros */
+  int n_wallets;              /* Número de carteras guardadas*/
+
+  /* Otro */
+  int accepted; /* Si la validación e so no correcta */
+
+  /* Productor-Consumidor */
+  sem_t sem_empty;
+  sem_t sem_fill;
+  sem_t sem_mutex;
+
+  Bloque_Buffer buffer[6];
+  int in;
+  int out;
 
 } Shared_Memory;
 
