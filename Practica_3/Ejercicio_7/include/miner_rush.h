@@ -96,9 +96,4 @@ typedef struct {
   int is_last;   /* 1 si el minero era el último, 0 si no */
 } Minero_Comprobador;
 
-/**
- * @brief Atributos de la cola de mensajes entre Minero y Comprobador
- */
-struct mq_attr attributes = {.mq_flags = 0, .mq_maxmsg = 7, .mq_curmsgs = 0, .mq_msgsize = sizeof(Minero_Comprobador)};
-
 #endif

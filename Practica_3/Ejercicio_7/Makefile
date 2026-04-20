@@ -37,7 +37,7 @@ clean:
 	@pkill -x $(EXEC1) 2>/dev/null; true
 	@pkill -x $(EXEC2) 2>/dev/null; true
 	@rm -f $(OBJ_DIR)/*.o $(EXEC1) $(EXEC2)
-	@rm -f tiempos.data *.log valgrind.data
+	@rm -f *.log valgrind.data
 	@rm -f /dev/shm/*shared_memory*
 	@rm -f /dev/mqueue/*message_queue*
 ifeq ($(UNAME), Darwin)
@@ -49,7 +49,7 @@ endif
 run: all
 	@echo "Lanzando el Monitor primero..."
 	./$(EXEC2) 500 1000 &
-	@sleep 1 # Damos un segundo para que el monitor cree la cola y la memoria
+	@sleep 1
 	@echo "Lanzando los Mineros..."
 	./$(EXEC1) 10 8000 & ./$(EXEC1) 20 8000 & ./$(EXEC1) 30 8000 &
 

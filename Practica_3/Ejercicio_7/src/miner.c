@@ -527,6 +527,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       sem = open_mutex();
       controlled_sem_wait(sem);
       shm->n_votes = 0;
+      sem_post(sem);
       sem_close(sem);
 
       broadcast_signal_to_participants(SIGUSR2);
@@ -541,6 +542,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
         shm->n_participants = 0;
         shm->winner = -1;
         shm->winner_solution = -1;
+        sem_post(sem);
         sem_close(sem);
 
         /* Si hay suficientes mineros para una nueva ronda se manda la señal para comenzar*/
@@ -575,6 +577,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
         shm->n_participants = 0;
         shm->winner = -1;
         shm->winner_solution = -1;
+        sem_post(sem);
         sem_close(sem);
 
         if (shm->n_miners >= 2) {
@@ -633,6 +636,7 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
       shm->n_participants = 0;
       shm->winner = -1;
       shm->winner_solution = -1;
+      sem_post(sem);
       sem_close(sem);
 
       current_target = sol;
@@ -655,20 +659,11 @@ int parentMiner(int target, int n_secs, int n_threads, int write_fd, int read_fd
     }
     got_usr2 = 0;
 
-    proposed = shm->target;  // REVIEW
-    /*proposed = current_target;
-    int proposed_read = 0;
-    for( retry = 0; retry < 5; retry++) {
-      if (read_target_file(&proposed)) {
-        proposed_read = 1;
-        break;
-      }
-      usleep(100000);
-    }
-
-    if (!proposed_read) {
-      fprintf(stderr, "Warning: failed to read proposed solution from %s, using current target %d for vote\n", TARGET_FILE, current_target);
-    }*/
+    sem = open_mutex();
+    controlled_sem_wait(sem);
+    proposed = shm->target;
+    sem_post(sem);
+    sem_close(sem);
 
     append_vote(getpid(), (pow_hash(proposed) == current_target) ? 'Y' : 'N');
 
@@ -859,7 +854,7 @@ void remove_miner(pid_t pid) {
 
   /* Comprobar si queda algún minero en el sistema */
   if (shm->n_miners == 0) {
-    no_miners_left = 0;
+    no_miners_left = 1;
   }
 
   /* Prints :3 */

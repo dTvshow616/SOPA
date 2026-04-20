@@ -8,6 +8,13 @@
 
 #include "miner_rush.h" /* Librería que define variables y librerías globales para todos los procesos */
 
+/* --------------------------------------------------- Estructuras --------------------------------------------------- */
+
+/**
+ * @brief Atributos de la cola de mensajes entre Minero y Comprobador
+ */
+struct mq_attr attributes = {.mq_flags = 0, .mq_maxmsg = 7, .mq_curmsgs = 0, .mq_msgsize = sizeof(Minero_Comprobador)};
+
 /* ----------------------------------------------- Funciones privadas ------------------------------------------------ */
 
 /**
@@ -234,6 +241,11 @@ void comprobador(int lag_comprobador) {
     shm->in = (shm->in + 1) % 6;   /* Actualizar índice nuevo elemento en buffer circular */
     sem_post(&shm->sem_mutex);     /* Up(sem_mutex); */
     sem_post(&shm->sem_fill);      /* Up(sem_fill); */
+
+    /* Terminar si el programa ha terminado */
+    if (bloque.is_last) {
+      break;
+    }
 
     /* Esperar el lag */
     usleep(lag_comprobador * 1000);
