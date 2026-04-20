@@ -81,9 +81,10 @@ typedef struct {
   sem_t sem_fill;
   sem_t sem_mutex;
 
-  Bloque_Buffer buffer[6];
-  int in;
-  int out;
+  /* Buffer circular */
+  Bloque_Buffer buffer[6]; /* Buffer cicular de 6 bloques */
+  int in;                  /* Índice del buffer en el que se introduce la información */
+  int out;                 /* Índice del buffer del que se saca la información */
 
 } Shared_Memory;
 
