@@ -92,9 +92,10 @@ typedef struct {
  * @brief Mensaje que viaja de Minero a Comprobador por la cola de mensajes
  */
 typedef struct {
-  long target;   /* El target a buscar por el minero */
-  long solution; /* La solución encontrada por el minero */
-  int is_last;   /* 1 si el minero era el último, 0 si no */
+  long target;     /* El target a buscar por el minero */
+  long solution;   /* La solución encontrada por el minero */
+  int is_last;     /* 1 si el minero era el último, 0 si no */
+  pid_t miner_pid; /* El pid del minero que envía el mensaje */
 } Minero_Comprobador;
 
 #endif

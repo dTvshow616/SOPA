@@ -18,7 +18,7 @@ int main(int argc, char* argv[]) {
   while (secs_passed != 10) {
     end = clock();
 
-    /* Si ha pasado un segundo, imprímelo :3 */
+    /* Si ha pasado un segundo, imprímelo 
     if (((end - start) - secs_passed * CLOCKS_PER_SEC) == 1 * CLOCKS_PER_SEC) {
       secs_passed++;
       if (secs_passed == 10) {

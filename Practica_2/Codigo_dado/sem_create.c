@@ -17,7 +17,7 @@ void sem_print(sem_t* sem) {
     sem_unlink(SEM_NAME);
     exit(EXIT_FAILURE);
   }
-  /* Si no da error se imprime su valor :3 */
+  /* Si no da error se imprime su valor
   printf("Semaphore value: %d\n", sval);
   fflush(stdout);
 }

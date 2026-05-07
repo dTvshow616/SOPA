@@ -290,16 +290,16 @@ int main(int argc, char* argv[]) {
     /* Configurar los manejadores de señales */
     setup_signal_handlers();
 
-    /* Acceder a la memoria compartida */
-    access_shared_memory();
-
     /* Acceso a la cola de mensajes */
     queue = mq_open(MQ_NAME, O_WRONLY);
     if (queue == (mqd_t)-1) {
       /* Si un minero arranca antes que el Monitor, dará un mensaje de error y saldrá del sistema */
-      perror("mq_open");
+      perror("Miner started before Monitor");
       exit(EXIT_FAILURE);
     }
+
+    /* Acceder a la memoria compartida */
+    access_shared_memory();
 
     /* Crear un minero y mirar si es el primero o no*/
     is_first = add_miner(getpid());
@@ -337,7 +337,7 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  /* Ser buen padre */
+  /* Esperar al hijo */
   wait(NULL);
 
   remove_miner(getpid());
@@ -865,7 +865,7 @@ int add_miner(pid_t pid) {
   shm->miners[shm->n_miners] = pid;
   shm->n_miners++;
 
-  /* Prints :3 */
+  /* Prints */
   printf("\x1b[34mMiner %d added to system\x1b[0m\n", pid);
   printf("Current miners: ");
   for (i = 0; i < shm->n_miners; i++) {
@@ -907,7 +907,7 @@ void remove_miner(pid_t pid) {
     }
   }
 
-  /* Print :3 */
+  /* Print */
   /*printf("\x1b[35mMiner %d exited system\x1b[0m\n", pid);*/
 
   /* Comprobar si queda algún minero en el sistema */
@@ -915,7 +915,7 @@ void remove_miner(pid_t pid) {
     no_miners_left = 1;
   }
 
-  /* Prints :3 */
+  /* Prints */
   if (!no_miners_left) {
     printf("Current miners: ");
     for (i = 0; i < shm->n_miners; i++) {
@@ -935,6 +935,7 @@ void remove_miner(pid_t pid) {
     msg.target = shm->target;
     msg.solution = solution;
     msg.is_last = 1;
+    msg.miner_pid = pid;
 
     if (mq_send(queue, (char*)&msg, sizeof(msg), 1) == -1) {
       perror("mq_send");
@@ -1138,10 +1139,13 @@ static int claim_winner(pid_t pid, int solution) {
     shm->winner = pid;
     shm->winner_solution = solution;
 
+    sem_post_and_close(sem);
+
     /* Enviar mensaje por la cola */
     msg.target = shm->target;
     msg.solution = solution;
     msg.is_last = 0;
+    msg.miner_pid = pid;
 
     if (mq_send(queue, (char*)&msg, sizeof(msg), 1) == -1) {
       perror("mq_send");
@@ -1154,9 +1158,9 @@ static int claim_winner(pid_t pid, int solution) {
 
   } else {
     already_claimed = 1;
-  }
 
-  sem_post_and_close(sem);
+    sem_post_and_close(sem);
+  }
 
   return !already_claimed;
 }

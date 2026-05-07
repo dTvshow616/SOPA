@@ -51,7 +51,7 @@ run: all
 	./$(EXEC2) 10 10 &
 	@sleep 1
 	@echo "Soltando a los mineros"
-	./$(EXEC1) 5 8000 & ./$(EXEC1) 10 8000 & ./$(EXEC1) 15 8000
+	./$(EXEC1) 2 8000 & ./$(EXEC1) 5 8000 & ./$(EXEC1) 7 8000
 
 toss:
 	@echo "Limpiando logs generados..."
@@ -60,7 +60,7 @@ toss:
 # No le metas muchos hilos a valgrind porque no puede soportarlo
 valgrind: all
 	@echo "Ejecutando monitor (en segundo plano) con valgrind"
-	valgrind --leak-check=full --track-origins=yes --trace-children=yes --log-file="valgrind_monitor.log" ./monitor 500 1000 &
+	valgrind --leak-check=full --track-origins=yes --trace-children=yes --log-file="valgrind_monitor.log" ./monitor 10 10 &
 	@sleep 2
 	@echo "Soltando a los mineros con valgrind"
 	valgrind --leak-check=full --track-origins=yes --trace-children=yes --log-file="valgrind_miner1.log" ./miner 5 5 &

@@ -28,9 +28,9 @@ void monitor(int lag_monitor);
 void comprobador(int lag_comprobador);
 
 /**
- * @brief It initializes the shared memory's info
+ * @brief Inicializa la información de la memoria
  *
- * @param shm a pointer to the shared memory
+ * @param shm un puntero a la memoria compartida
  */
 void init_shm(Shared_Memory* shm);
 
@@ -40,7 +40,7 @@ volatile sig_atomic_t stop = 0; /* Variable de control para que el minero sepa q
 
 /* ----------------------------------------------------- Código ------------------------------------------------------ */
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) {  /* Arranca en primer lugar y finaliza el último */
   int lag_comprobador, lag_monitor; /* Retraso en milisegundos de cada cosa */
 
   if (argc != 3) {
@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
     return -1;
   }
 
-  printf("---------------------------------------- Welcome to Miner Rush! :] ----------------------------------------\n");
+  printf("\n<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< Welcome to Miner Rush! >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n");
 
   /* Mitosis */
   int pid = fork();
@@ -68,12 +68,11 @@ int main(int argc, char* argv[]) {
   } else { /* Comprobador */
     comprobador(lag_comprobador);
 
-    /* Ser buen padre */
+    /* Esperar al hijo */
     wait(NULL);
   }
 
-  printf("--------------------------------------- The Miner Rush has ended :7 ---------------------------------------\n");
-  printf("                                         (I'm not stuck, hit Enter)\n");
+  printf("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< The Miner Rush has ended >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n");
 
   return 0;
 }
@@ -81,7 +80,7 @@ int main(int argc, char* argv[]) {
 /* ----------------------------------------------- Funciones privadas ------------------------------------------------ */
 
 /**
- * @brief Se encarga de mostrar la salida unificada, hijo de Comprobador. Arranca en primer lugar y finaliza el último
+ * @brief Se encarga de mostrar la salida unificada, hijo de Comprobador
  */
 void monitor(int lag_monitor) {
   int fd_shm;           /* Descriptor de fichero de la memoria compartida*/
@@ -144,7 +143,7 @@ void monitor(int lag_monitor) {
       break;
     }
 
-    /* Prints :3 */
+    /* Prints */
     if (bloque.is_valid == 1) {
       printf("Solution \x1b[32maccepted\x1b[0m: %08ld --> %08ld\n", bloque.target, bloque.solution);
     } else {
@@ -184,6 +183,7 @@ void comprobador(int lag_comprobador) {
   Shared_Memory* shm;          /* Puntero a la memoria compartida*/
   mqd_t queue;                 /* La cola de mensajes */
   int i, fd_shm, found_wallet; /* Variable de bucle, descriptor del fichero de memoria compartida y si se ha encontrado la cartera */
+  sem_t* sem_miners;           /* Puntero al semáforo de los mineros */
   Bloque_Buffer bloque;        /* Bloque que será añadido al buffer del modelo Productor-Consumidor */
 
   /* Dar mini retardo para que se cree la memoria compartida */
@@ -193,6 +193,13 @@ void comprobador(int lag_comprobador) {
   fd_shm = shm_open(SHM_NAME, O_RDWR, 0);
   shm = mmap(NULL, sizeof(Shared_Memory), PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm, 0);
   close(fd_shm);
+
+  /* Abrir el semáforo de los mineros */
+  sem_miners = sem_open(SEM_NAME, 0);
+  if (sem_miners == SEM_FAILED) {
+    perror("sem_open comprobador");
+    exit(EXIT_FAILURE);
+  }
 
   /* Crear la cola de mensajes por donde le llegarán las soluciones a validar */
   queue = mq_open(MQ_NAME, O_CREAT | O_RDONLY, S_IRUSR | S_IWUSR, &attributes);
@@ -220,12 +227,13 @@ void comprobador(int lag_comprobador) {
         bloque.is_valid = 1;
 
         /* Añadir la moneda al ganador*/
-        sem_wait(&shm->sem_mutex);
         found_wallet = 0;
+
+        sem_wait(sem_miners);
 
         /* Buscar la cartera */
         for (i = 0; i < shm->n_wallets; i++) {
-          if (shm->wallets[i].pid == shm->winner) {
+          if (shm->wallets[i].pid == msg.miner_pid) {
             shm->wallets[i].coins++;
             printf("\x1b[36mMiner %d was given their coin, they now have %d coins\x1b[0m\n", shm->wallets[i].pid, shm->wallets[i].coins);
             found_wallet = 1;
@@ -235,13 +243,13 @@ void comprobador(int lag_comprobador) {
 
         /* Registrar la nueva cartera si no existía previamente y cabe en el array */
         if (!found_wallet && shm->n_wallets < MAX_MINERS) {
-          printf("\x1b[36mMiner %d was broke, gifting them a wallet as well, they now have 1 coin\x1b[0m\n", shm->winner);
-          shm->wallets[shm->n_wallets].pid = shm->winner;
+          printf("\x1b[36mMiner %d was broke, gifting them a wallet as well, they now have 1 coin\x1b[0m\n", msg.miner_pid);
+          shm->wallets[shm->n_wallets].pid = msg.miner_pid;
           shm->wallets[shm->n_wallets].coins = 1;
           shm->n_wallets++;
         }
 
-        sem_post(&shm->sem_mutex);
+        sem_post(sem_miners);
 
       } else {
         bloque.is_valid = 0;
@@ -277,9 +285,7 @@ void comprobador(int lag_comprobador) {
 }
 
 /**
- * @brief It initializes the shared memory's info
- *
- * @param shm a pointer to the shared memory
+ * @brief Inicializa la información de la memoria
  */
 void init_shm(Shared_Memory* shm) {
   shm->n_miners = 0;
@@ -288,4 +294,6 @@ void init_shm(Shared_Memory* shm) {
   shm->target = 0;
   shm->winner = -1;
   shm->winner_solution = -1;
+  shm->in = 0;
+  shm->out = 0;
 }
